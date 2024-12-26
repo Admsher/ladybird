@@ -169,11 +169,16 @@ public:
     };
     void collect_animation_into(DOM::Element&, Optional<CSS::Selector::PseudoElement::Type>, GC::Ref<Animations::KeyframeEffect> animation, ComputedProperties&, AnimationRefresh = AnimationRefresh::No) const;
 
-    [[nodiscard]] bool has_has_selectors() const { return m_has_has_selectors; }
+    [[nodiscard]] bool has_has_selectors() const;
+    [[nodiscard]] bool has_defined_selectors() const;
+    [[nodiscard]] bool has_attribute_selector(FlyString const& attribute_name) const;
 
     size_t number_of_css_font_faces_with_loading_in_progress() const;
 
     [[nodiscard]] GC::Ref<ComputedProperties> compute_properties(DOM::Element&, Optional<Selector::PseudoElement::Type>, CascadedProperties&) const;
+
+    void absolutize_values(ComputedProperties&) const;
+    void compute_font(ComputedProperties&, DOM::Element const*, Optional<CSS::Selector::PseudoElement::Type>) const;
 
 private:
     enum class ComputeStyleMode {
@@ -190,11 +195,9 @@ private:
     static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_ascending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
     static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_descending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
     RefPtr<Gfx::FontCascadeList const> font_matching_algorithm(FlyString const& family_name, int weight, int slope, float font_size_in_pt) const;
-    void compute_font(ComputedProperties&, DOM::Element const*, Optional<CSS::Selector::PseudoElement::Type>) const;
     void compute_math_depth(ComputedProperties&, DOM::Element const*, Optional<CSS::Selector::PseudoElement::Type>) const;
     void compute_defaulted_values(ComputedProperties&, DOM::Element const*, Optional<CSS::Selector::PseudoElement::Type>) const;
     void start_needed_transitions(ComputedProperties const& old_style, ComputedProperties& new_style, DOM::Element&, Optional<Selector::PseudoElement::Type>) const;
-    void absolutize_values(ComputedProperties&) const;
     void resolve_effective_overflow_values(ComputedProperties&) const;
     void transform_box_type_if_needed(ComputedProperties&, DOM::Element const&, Optional<CSS::Selector::PseudoElement::Type>) const;
 
@@ -246,6 +249,12 @@ private:
 
     GC::Ref<DOM::Document> m_document;
 
+    struct SelectorInsights {
+        bool has_has_selectors { false };
+        bool has_defined_selectors { false };
+        HashTable<FlyString> all_names_used_in_attribute_selectors;
+    };
+
     struct RuleCache {
         HashMap<FlyString, Vector<MatchingRule>> rules_by_id;
         HashMap<FlyString, Vector<MatchingRule>> rules_by_class;
@@ -256,15 +265,15 @@ private:
         Vector<MatchingRule> other_rules;
 
         HashMap<FlyString, NonnullRefPtr<Animations::KeyframeEffect::KeyFrameSet>> rules_by_animation_keyframes;
-
-        bool has_has_selectors { false };
     };
 
-    NonnullOwnPtr<RuleCache> make_rule_cache_for_cascade_origin(CascadeOrigin);
+    NonnullOwnPtr<RuleCache> make_rule_cache_for_cascade_origin(CascadeOrigin, SelectorInsights&);
 
     RuleCache const& rule_cache_for_cascade_origin(CascadeOrigin) const;
 
-    bool m_has_has_selectors { false };
+    static void collect_selector_insights(Selector const&, SelectorInsights&);
+
+    OwnPtr<SelectorInsights> m_selector_insights;
     OwnPtr<RuleCache> m_author_rule_cache;
     OwnPtr<RuleCache> m_user_rule_cache;
     OwnPtr<RuleCache> m_user_agent_rule_cache;

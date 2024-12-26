@@ -71,6 +71,7 @@ enum class IsDescendant {
     X(ElementSetShadowRoot)                         \
     X(FocusedElementChange)                         \
     X(HTMLHyperlinkElementHrefChange)               \
+    X(HTMLIFrameElementGeometryChange)              \
     X(HTMLInputElementSetChecked)                   \
     X(HTMLObjectElementUpdateLayoutAndChildObjects) \
     X(HTMLSelectElementSetIsOpen)                   \
@@ -274,6 +275,9 @@ public:
 
     bool needs_style_update() const { return m_needs_style_update; }
     void set_needs_style_update(bool);
+
+    bool needs_inherited_style_update() const { return m_needs_inherited_style_update; }
+    void set_needs_inherited_style_update(bool);
 
     bool child_needs_style_update() const { return m_child_needs_style_update; }
     void set_child_needs_style_update(bool b) { m_child_needs_style_update = b; }
@@ -746,6 +750,7 @@ protected:
     GC::Ptr<Painting::Paintable> m_paintable;
     NodeType m_type { NodeType::INVALID };
     bool m_needs_style_update { false };
+    bool m_needs_inherited_style_update { false };
     bool m_child_needs_style_update { false };
 
     UniqueNodeID m_unique_id;

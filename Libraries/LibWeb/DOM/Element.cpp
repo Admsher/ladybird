@@ -554,6 +554,32 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style()
     return invalidation;
 }
 
+CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
+{
+    // Traversal of the subtree is necessary to update the animated properties inherited from the target element.
+    auto computed_properties = this->computed_properties();
+    if (!computed_properties || !layout_node())
+        return {};
+
+    CSS::RequiredInvalidationAfterStyleChange invalidation;
+
+    for (auto i = to_underlying(CSS::first_property_id); i <= to_underlying(CSS::last_property_id); ++i) {
+        auto property_id = static_cast<CSS::PropertyID>(i);
+        if (!computed_properties->is_property_inherited(property_id))
+            continue;
+        RefPtr old_value = computed_properties->maybe_null_property(property_id);
+        RefPtr new_value = CSS::StyleComputer::get_inherit_value(property_id, this);
+        computed_properties->set_property(property_id, *new_value, CSS::ComputedProperties::Inherited::Yes);
+        invalidation |= CSS::compute_property_invalidation(property_id, old_value, new_value);
+    }
+
+    document().style_computer().compute_font(*computed_properties, this, {});
+    document().style_computer().absolutize_values(*computed_properties);
+
+    layout_node()->apply_style(*computed_properties);
+    return invalidation;
+}
+
 GC::Ref<CSS::ComputedProperties> Element::resolved_css_values(Optional<CSS::Selector::PseudoElement::Type> type)
 {
     auto element_computed_style = CSS::ResolvedCSSStyleDeclaration::create(*this, type);
@@ -1874,12 +1900,53 @@ ErrorOr<void> Element::scroll_into_view(Optional<Variant<bool, ScrollIntoViewOpt
     // FIXME: 8. Optionally perform some other action that brings the element to the user’s attention.
 }
 
+static bool attribute_name_may_affect_selectors(Element const& element, FlyString const& attribute_name)
+{
+    // FIXME: We could make these cases more narrow by making the conditions more elaborate.
+    if (attribute_name == HTML::AttributeNames::id
+        || attribute_name == HTML::AttributeNames::class_
+        || attribute_name == HTML::AttributeNames::dir
+        || attribute_name == HTML::AttributeNames::lang
+        || attribute_name == HTML::AttributeNames::checked
+        || attribute_name == HTML::AttributeNames::disabled
+        || attribute_name == HTML::AttributeNames::readonly
+        || attribute_name == HTML::AttributeNames::switch_
+        || attribute_name == HTML::AttributeNames::href
+        || attribute_name == HTML::AttributeNames::open
+        || attribute_name == HTML::AttributeNames::placeholder) {
+        return true;
+    }
+
+    return element.document().style_computer().has_attribute_selector(attribute_name);
+}
+
 void Element::invalidate_style_after_attribute_change(FlyString const& attribute_name)
 {
     // FIXME: Only invalidate if the attribute can actually affect style.
-    (void)attribute_name;
 
-    invalidate_style(StyleInvalidationReason::ElementAttributeChange);
+    // OPTIMIZATION: For the `style` attribute, unless it's referenced by an attribute selector,
+    //               only invalidate the element itself, then let inheritance propagate to descendants.
+    if (attribute_name == HTML::AttributeNames::style) {
+        if (!document().style_computer().has_attribute_selector(HTML::AttributeNames::style)) {
+            set_needs_style_update(true);
+            for_each_shadow_including_descendant([](Node& node) {
+                if (!node.is_element())
+                    return TraversalDecision::Continue;
+                auto& element = static_cast<Element&>(node);
+                element.set_needs_inherited_style_update(true);
+                return TraversalDecision::Continue;
+            });
+        } else {
+            invalidate_style(StyleInvalidationReason::ElementAttributeChange);
+        }
+        return;
+    }
+
+    if (is_presentational_hint(attribute_name)
+        || attribute_name_may_affect_selectors(*this, attribute_name)) {
+        invalidate_style(StyleInvalidationReason::ElementAttributeChange);
+        return;
+    }
 }
 
 bool Element::is_hidden() const
@@ -2199,7 +2266,9 @@ void Element::set_custom_element_state(CustomElementState state)
     if (m_custom_element_state == state)
         return;
     m_custom_element_state = state;
-    invalidate_style(StyleInvalidationReason::CustomElementStateChange);
+
+    if (document().style_computer().has_defined_selectors())
+        invalidate_style(StyleInvalidationReason::CustomElementStateChange);
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#html-element-constructors

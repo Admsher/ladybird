@@ -2047,8 +2047,14 @@ void StyleComputer::compute_font(ComputedProperties& style, DOM::Element const* 
 
     RefPtr<Gfx::Font const> const found_font = font_list->first();
 
-    style.set_property(CSS::PropertyID::FontSize, LengthStyleValue::create(CSS::Length::make_px(CSSPixels::nearest_value_for(found_font->pixel_size()))));
-    style.set_property(CSS::PropertyID::FontWeight, NumberStyleValue::create(font_weight.to_font_weight()));
+    style.set_property(
+        CSS::PropertyID::FontSize,
+        LengthStyleValue::create(CSS::Length::make_px(CSSPixels::nearest_value_for(found_font->pixel_size()))),
+        style.is_property_inherited(CSS::PropertyID::FontSize) ? ComputedProperties::Inherited::Yes : ComputedProperties::Inherited::No);
+    style.set_property(
+        CSS::PropertyID::FontWeight,
+        NumberStyleValue::create(font_weight.to_font_weight()),
+        style.is_property_inherited(CSS::PropertyID::FontWeight) ? ComputedProperties::Inherited::Yes : ComputedProperties::Inherited::No);
 
     style.set_computed_font_list(*font_list);
 
@@ -2331,10 +2337,13 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
     for (auto i = to_underlying(first_longhand_property_id); i <= to_underlying(last_longhand_property_id); ++i) {
         auto property_id = static_cast<CSS::PropertyID>(i);
         auto value = cascaded_properties.property(property_id);
+        auto inherited = ComputedProperties::Inherited::No;
+
         if ((!value && is_inherited_property(property_id))
             || (value && value->is_inherit())) {
             if (auto inheritance_parent = element_to_inherit_style_from(&element, pseudo_element)) {
                 value = inheritance_parent->computed_properties()->property(property_id);
+                inherited = ComputedProperties::Inherited::Yes;
             } else {
                 value = property_initial_value(property_id);
             }
@@ -2350,7 +2359,7 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
                 value = CSSKeywordValue::create(Keyword::Initial);
         }
 
-        computed_style->set_property(property_id, value.release_nonnull());
+        computed_style->set_property(property_id, value.release_nonnull(), inherited);
 
         if (property_id == PropertyID::AnimationName) {
             computed_style->set_animation_name_source(cascaded_properties.property_source(property_id));
@@ -2500,24 +2509,29 @@ static Optional<SimplifiedSelectorForBucketing> is_roundabout_selector_bucketabl
     return {};
 }
 
-static bool contains_has_pseudo_class(Selector const& selector)
+void StyleComputer::collect_selector_insights(Selector const& selector, SelectorInsights& insights)
 {
     for (auto const& compound_selector : selector.compound_selectors()) {
         for (auto const& simple_selector : compound_selector.simple_selectors) {
-            if (simple_selector.type != CSS::Selector::SimpleSelector::Type::PseudoClass)
-                continue;
-            if (simple_selector.pseudo_class().type == CSS::PseudoClass::Has)
-                return true;
-            for (auto const& argument_selector : simple_selector.pseudo_class().argument_selector_list) {
-                if (contains_has_pseudo_class(argument_selector))
-                    return true;
+            if (simple_selector.type == Selector::SimpleSelector::Type::Attribute) {
+                insights.all_names_used_in_attribute_selectors.set(simple_selector.attribute().qualified_name.name.lowercase_name);
+            }
+            if (simple_selector.type == Selector::SimpleSelector::Type::PseudoClass) {
+                if (simple_selector.pseudo_class().type == PseudoClass::Has) {
+                    insights.has_has_selectors = true;
+                }
+                if (simple_selector.pseudo_class().type == PseudoClass::Defined) {
+                    insights.has_defined_selectors = true;
+                }
+                for (auto const& argument_selector : simple_selector.pseudo_class().argument_selector_list) {
+                    collect_selector_insights(*argument_selector, insights);
+                }
             }
         }
     }
-    return false;
 }
 
-NonnullOwnPtr<StyleComputer::RuleCache> StyleComputer::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin)
+NonnullOwnPtr<StyleComputer::RuleCache> StyleComputer::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, SelectorInsights& insights)
 {
     auto rule_cache = make<RuleCache>();
 
@@ -2560,8 +2574,7 @@ NonnullOwnPtr<StyleComputer::RuleCache> StyleComputer::make_rule_cache_for_casca
                 bool contains_root_pseudo_class = false;
                 Optional<CSS::Selector::PseudoElement::Type> pseudo_element;
 
-                if (!rule_cache->has_has_selectors)
-                    rule_cache->has_has_selectors = contains_has_pseudo_class(selector);
+                collect_selector_insights(selector, insights);
 
                 for (auto const& simple_selector : selector.compound_selectors().last().simple_selectors) {
                     if (!matching_rule.contains_pseudo_element) {
@@ -2804,17 +2817,17 @@ void StyleComputer::build_qualified_layer_names_cache()
 
 void StyleComputer::build_rule_cache()
 {
+    m_selector_insights = make<SelectorInsights>();
+
     if (auto user_style_source = document().page().user_style(); user_style_source.has_value()) {
         m_user_style_sheet = GC::make_root(parse_css_stylesheet(CSS::Parser::ParsingContext(document()), user_style_source.value()));
     }
 
     build_qualified_layer_names_cache();
 
-    m_author_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::Author);
-    m_user_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::User);
-    m_user_agent_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::UserAgent);
-
-    m_has_has_selectors = m_author_rule_cache->has_has_selectors || m_user_rule_cache->has_has_selectors || m_user_agent_rule_cache->has_has_selectors;
+    m_author_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::Author, *m_selector_insights);
+    m_user_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::User, *m_selector_insights);
+    m_user_agent_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::UserAgent, *m_selector_insights);
 }
 
 void StyleComputer::invalidate_rule_cache()
@@ -2994,6 +3007,25 @@ size_t StyleComputer::number_of_css_font_faces_with_loading_in_progress() const
         }
     }
     return count;
+}
+
+bool StyleComputer::has_has_selectors() const
+{
+    build_rule_cache_if_needed();
+    return m_selector_insights->has_has_selectors;
+}
+
+bool StyleComputer::has_defined_selectors() const
+{
+    build_rule_cache_if_needed();
+    return m_selector_insights->has_defined_selectors;
+}
+
+bool StyleComputer::has_attribute_selector(FlyString const& attribute_name) const
+{
+    build_rule_cache_if_needed();
+
+    return m_selector_insights->all_names_used_in_attribute_selectors.contains(attribute_name);
 }
 
 }

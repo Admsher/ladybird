@@ -173,11 +173,13 @@ public:
     // https://html.spec.whatwg.org/multipage/embedded-content-other.html#dimension-attributes
     virtual bool supports_dimension_attributes() const { return false; }
 
+    virtual bool is_presentational_hint(FlyString const&) const { return false; }
     virtual void apply_presentational_hints(GC::Ref<CSS::CascadedProperties>) const { }
 
     void run_attribute_change_steps(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_);
 
     CSS::RequiredInvalidationAfterStyleChange recompute_style();
+    CSS::RequiredInvalidationAfterStyleChange recompute_inherited_style();
 
     Optional<CSS::Selector::PseudoElement::Type> use_pseudo_element() const { return m_use_pseudo_element; }
     void set_use_pseudo_element(Optional<CSS::Selector::PseudoElement::Type> use_pseudo_element) { m_use_pseudo_element = move(use_pseudo_element); }

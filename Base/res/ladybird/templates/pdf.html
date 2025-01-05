@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF.js Example</title>
+</head>
+<body>
+  <canvas id="pdf-canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.17.359/pdf.min.js"></script>
+    <script src="Libraries/pdf.js"></script>
+    <script src="Libraries/pdf.js/src/pdf.worker.js"></script>
+  <script>
+    // URL of the PDF
+const pdfUrl = 'Libraries/pdf.js/examples/learning/helloworld.pdf';
+
+// Reference to the canvas element
+const canvas = document.getElementById('pdf-canvas');
+const ctx = canvas.getContext('2d');
+
+// Load the PDF
+pdfjsLib.getDocument(pdfUrl).promise.then(pdf => {
+  // Fetch the first page
+  pdf.getPage(1).then(page => {
+    const viewport = page.getViewport({ scale: 1.5 });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    // Render the page onto the canvas
+    const renderContext = {
+      canvasContext: ctx,
+      viewport: viewport
+    };
+    page.render(renderContext);
+  });
+}).catch(error => {
+  console.error('Error loading PDF:', error);
+});
+
+  </script>
+</body>
+</html>

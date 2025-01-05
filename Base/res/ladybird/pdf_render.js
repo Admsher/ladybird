@@ -1,38 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>New Tab</title>
-    <style>
-        /* FIXME: We should be able to remove the HTML style when "color-scheme" is supported */
-        @media (prefers-color-scheme: dark) {
-            html {
-                background-color: rgb(20, 20, 20);
-            }
-        }
-    </style>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
-    
-</head>
-</head>
-  <body>
-    <div class="top-bar">
-      <button class="btn" id="prev-page">
-        <i class="fas fa-arrow-circle-left"></i> Prev Page
-      </button>
-      <button class="btn" id="next-page">
-        Next Page <i class="fas fa-arrow-circle-right"></i>
-      </button>
-      <span class="page-info">
-        Page <span id="page-num"></span> of <span id="page-count"></span>
-      </span>
-    </div>
-
-    <canvas id="pdf-render"></canvas>
-    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.7.570/build/pdf.min.js"></script>
-    <script>
-
-    const url = 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
+const url = '';
 
 let pdfDoc = null,
   pageNum = 1,
@@ -99,7 +65,7 @@ const showNextPage = () => {
   pageNum++;
   queueRenderPage(pageNum);
 };
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://mozilla.github.io/pdf.js/build/pdf.worker.js';
+
 // Get Document
 pdfjsLib
   .getDocument(url)
@@ -123,9 +89,3 @@ pdfjsLib
 // Button Events
 document.querySelector('#prev-page').addEventListener('click', showPrevPage);
 document.querySelector('#next-page').addEventListener('click', showNextPage);
-
-
-    </script>
-  </body>
-
-</html>

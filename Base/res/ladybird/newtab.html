@@ -7,7 +7,7 @@
         /* FIXME: We should be able to remove the HTML style when "color-scheme" is supported */
         @media (prefers-color-scheme: dark) {
             html {
-                background-color: rgb(20, 20, 20);
+                background-color: rgb(252, 252, 252);
             }
         }
     </style>
@@ -33,7 +33,7 @@
     <script>
 
     const url = 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
-
+    // const url = '/home/admsher/ladybird/Base/res/ladybird/160F-2019.pdf';
 let pdfDoc = null,
   pageNum = 1,
   pageIsRendering = false,
@@ -51,8 +51,9 @@ const renderPage = num => {
   pdfDoc.getPage(num).then(page => {
     // Set scale
     const viewport = page.getViewport({ scale });
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
+    // terminal.log(viewport);
+    canvas.height = 200;
+    canvas.width = 100;
 
     const renderCtx = {
       canvasContext: ctx,
@@ -99,7 +100,8 @@ const showNextPage = () => {
   pageNum++;
   queueRenderPage(pageNum);
 };
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://mozilla.github.io/pdf.js/build/pdf.worker.js';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.7.570/pdf.worker.min.js';
+
 // Get Document
 pdfjsLib
   .getDocument(url)

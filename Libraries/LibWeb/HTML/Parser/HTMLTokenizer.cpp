@@ -94,9 +94,10 @@ namespace Web::HTML {
         }                                                        \
     } while (0)
 
-#define DONT_CONSUME_NEXT_INPUT_CHARACTER \
-    do {                                  \
-        restore_to(m_prev_utf8_iterator); \
+#define DONT_CONSUME_NEXT_INPUT_CHARACTER        \
+    do {                                         \
+        if (current_input_character.has_value()) \
+            restore_to(m_prev_utf8_iterator);    \
     } while (0)
 
 #define ON(code_point) \
@@ -174,14 +175,11 @@ namespace Web::HTML {
 #define SWITCH_TO_AND_EMIT_CURRENT_CHARACTER(new_state) \
     SWITCH_TO_AND_EMIT_CHARACTER(current_input_character.value(), new_state)
 
-// clang-format-18 handles the `state:` label rather badly.
-// clang-format off
 #define BEGIN_STATE(state) \
     state:                 \
     case State::state: {   \
         {                  \
             {
-// clang-format on
 
 #define END_STATE         \
     VERIFY_NOT_REACHED(); \
@@ -1821,16 +1819,11 @@ _StartOfFunction:
                     m_character_reference_code += current_input_character.value() - 0x30;
                     continue;
                 }
-                ON_ASCII_UPPER_ALPHA
+                ON_ASCII_HEX_DIGIT
                 {
                     m_character_reference_code *= 16;
-                    m_character_reference_code += current_input_character.value() - 0x37;
-                    continue;
-                }
-                ON_ASCII_LOWER_ALPHA
-                {
-                    m_character_reference_code *= 16;
-                    m_character_reference_code += current_input_character.value() - 0x57;
+                    auto hex_digit_min_ascii_value = is_ascii_upper_alpha(current_input_character.value()) ? 0x37 : 0x57;
+                    m_character_reference_code += current_input_character.value() - hex_digit_min_ascii_value;
                     continue;
                 }
                 ON(';')

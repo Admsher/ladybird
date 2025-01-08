@@ -797,7 +797,7 @@ Optional<CSS::Selector::PseudoElement::Type> KeyframeEffect::pseudo_element_type
 }
 
 // https://www.w3.org/TR/web-animations-1/#dom-keyframeeffect-getkeyframes
-WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> KeyframeEffect::get_keyframes()
+WebIDL::ExceptionOr<GC::RootVector<JS::Object*>> KeyframeEffect::get_keyframes()
 {
     if (m_keyframe_objects.size() != m_keyframes.size()) {
         auto& vm = this->vm();
@@ -832,7 +832,7 @@ WebIDL::ExceptionOr<GC::MarkedVector<JS::Object*>> KeyframeEffect::get_keyframes
         }
     }
 
-    GC::MarkedVector<JS::Object*> keyframes { heap() };
+    GC::RootVector<JS::Object*> keyframes { heap() };
     for (auto const& keyframe : m_keyframe_objects)
         keyframes.append(keyframe);
     return keyframes;
@@ -939,7 +939,10 @@ void KeyframeEffect::update_computed_properties()
 
     // Traversal of the subtree is necessary to update the animated properties inherited from the target element.
     target->for_each_in_subtree_of_type<DOM::Element>([&](auto& element) {
-        invalidation |= element.recompute_inherited_style();
+        auto element_invalidation = element.recompute_inherited_style();
+        if (element_invalidation.is_none())
+            return TraversalDecision::SkipChildrenAndContinue;
+        invalidation |= element_invalidation;
         return TraversalDecision::Continue;
     });
 

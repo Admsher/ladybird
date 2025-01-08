@@ -173,7 +173,7 @@ static DOM::Element const* element_to_inherit_style_from(DOM::Element const*, Op
 
 StyleComputer::StyleComputer(DOM::Document& document)
     : m_document(document)
-    , m_default_font_metrics(16, Platform::FontPlugin::the().default_font().pixel_metrics())
+    , m_default_font_metrics(16, Platform::FontPlugin::the().default_font(16)->pixel_metrics())
     , m_root_element_font_metrics(m_default_font_metrics)
 {
     m_qualified_layer_names_in_order.append({});
@@ -421,8 +421,13 @@ bool StyleComputer::should_reject_with_ancestor_filter(Selector const& selector)
     }
     return false;
 }
+Vector<MatchingRule> const& StyleComputer::get_hover_rules() const
+{
+    build_rule_cache_if_needed();
+    return m_hover_rules;
+}
 
-Vector<MatchingRule> StyleComputer::collect_matching_rules(DOM::Element const& element, CascadeOrigin cascade_origin, Optional<CSS::Selector::PseudoElement::Type> pseudo_element, FlyString const& qualified_layer_name) const
+Vector<MatchingRule> StyleComputer::collect_matching_rules(DOM::Element const& element, CascadeOrigin cascade_origin, Optional<CSS::Selector::PseudoElement::Type> pseudo_element, bool& did_match_any_hover_rules, FlyString const& qualified_layer_name) const
 {
     auto const& root_node = element.root();
     auto shadow_root = is<DOM::ShadowRoot>(root_node) ? static_cast<DOM::ShadowRoot const*>(&root_node) : nullptr;
@@ -435,22 +440,16 @@ Vector<MatchingRule> StyleComputer::collect_matching_rules(DOM::Element const& e
 
     auto const& rule_cache = rule_cache_for_cascade_origin(cascade_origin);
 
-    bool is_hovered = SelectorEngine::matches_hover_pseudo_class(element);
-
     Vector<MatchingRule, 512> rules_to_run;
     auto add_rules_to_run = [&](Vector<MatchingRule> const& rules) {
         rules_to_run.grow_capacity(rules_to_run.size() + rules.size());
         if (pseudo_element.has_value()) {
             for (auto const& rule : rules) {
-                if (rule.must_be_hovered && !is_hovered)
-                    continue;
                 if (rule.contains_pseudo_element && filter_namespace_rule(element, rule) && filter_layer(qualified_layer_name, rule))
                     rules_to_run.unchecked_append(rule);
             }
         } else {
             for (auto const& rule : rules) {
-                if (rule.must_be_hovered && !is_hovered)
-                    continue;
                 if (!rule.contains_pseudo_element && filter_namespace_rule(element, rule) && filter_layer(qualified_layer_name, rule))
                     rules_to_run.unchecked_append(rule);
             }
@@ -537,11 +536,16 @@ Vector<MatchingRule> StyleComputer::collect_matching_rules(DOM::Element const& e
 
         auto const& selector = rule_to_run.absolutized_selectors()[rule_to_run.selector_index];
 
+        SelectorEngine::MatchContext context { .style_sheet_for_rule = *rule_to_run.sheet };
+        ScopeGuard guard = [&] {
+            if (context.did_match_any_hover_rules)
+                did_match_any_hover_rules = true;
+        };
         if (rule_to_run.can_use_fast_matches) {
-            if (!SelectorEngine::fast_matches(selector, *rule_to_run.sheet, element, shadow_host_to_use))
+            if (!SelectorEngine::fast_matches(selector, element, shadow_host_to_use, context))
                 continue;
         } else {
-            if (!SelectorEngine::matches(selector, *rule_to_run.sheet, element, shadow_host_to_use, pseudo_element))
+            if (!SelectorEngine::matches(selector, element, shadow_host_to_use, context, pseudo_element))
                 continue;
         }
         matching_rules.append(rule_to_run);
@@ -1125,6 +1129,9 @@ void StyleComputer::collect_animation_into(DOM::Element& element, Optional<CSS::
 
 static void apply_animation_properties(DOM::Document& document, CascadedProperties& cascaded_properties, Animations::Animation& animation)
 {
+    if (!animation.effect())
+        return;
+
     auto& effect = verify_cast<Animations::KeyframeEffect>(*animation.effect());
 
     Optional<CSS::Time> duration;
@@ -1485,24 +1492,24 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
 
 // https://www.w3.org/TR/css-cascade/#cascading
 // https://drafts.csswg.org/css-cascade-5/#layering
-GC::Ref<CascadedProperties> StyleComputer::compute_cascaded_values(DOM::Element& element, Optional<CSS::Selector::PseudoElement::Type> pseudo_element, bool& did_match_any_pseudo_element_rules, ComputeStyleMode mode) const
+GC::Ref<CascadedProperties> StyleComputer::compute_cascaded_values(DOM::Element& element, Optional<CSS::Selector::PseudoElement::Type> pseudo_element, bool& did_match_any_pseudo_element_rules, bool& did_match_any_hover_rules, ComputeStyleMode mode) const
 {
     auto cascaded_properties = m_document->heap().allocate<CascadedProperties>();
 
     // First, we collect all the CSS rules whose selectors match `element`:
     MatchingRuleSet matching_rule_set;
-    matching_rule_set.user_agent_rules = collect_matching_rules(element, CascadeOrigin::UserAgent, pseudo_element);
+    matching_rule_set.user_agent_rules = collect_matching_rules(element, CascadeOrigin::UserAgent, pseudo_element, did_match_any_hover_rules);
     sort_matching_rules(matching_rule_set.user_agent_rules);
-    matching_rule_set.user_rules = collect_matching_rules(element, CascadeOrigin::User, pseudo_element);
+    matching_rule_set.user_rules = collect_matching_rules(element, CascadeOrigin::User, pseudo_element, did_match_any_hover_rules);
     sort_matching_rules(matching_rule_set.user_rules);
     // @layer-ed author rules
     for (auto const& layer_name : m_qualified_layer_names_in_order) {
-        auto layer_rules = collect_matching_rules(element, CascadeOrigin::Author, pseudo_element, layer_name);
+        auto layer_rules = collect_matching_rules(element, CascadeOrigin::Author, pseudo_element, did_match_any_hover_rules, layer_name);
         sort_matching_rules(layer_rules);
         matching_rule_set.author_rules.append({ layer_name, layer_rules });
     }
     // Un-@layer-ed author rules
-    auto unlayered_author_rules = collect_matching_rules(element, CascadeOrigin::Author, pseudo_element);
+    auto unlayered_author_rules = collect_matching_rules(element, CascadeOrigin::Author, pseudo_element, did_match_any_hover_rules);
     sort_matching_rules(unlayered_author_rules);
     matching_rule_set.author_rules.append({ {}, unlayered_author_rules });
 
@@ -1772,9 +1779,7 @@ RefPtr<Gfx::FontCascadeList const> StyleComputer::compute_font_for_style_values(
     auto* parent_element = element_to_inherit_style_from(element, pseudo_element);
 
     auto width = font_stretch.to_font_width();
-
     auto weight = font_weight.to_font_weight();
-    bool bold = weight > Gfx::FontWeight::Regular;
 
     // FIXME: Should be based on "user's default font size"
     CSSPixels font_size_in_px = 16;
@@ -1783,7 +1788,7 @@ RefPtr<Gfx::FontCascadeList const> StyleComputer::compute_font_for_style_values(
     if (parent_element && parent_element->computed_properties())
         font_pixel_metrics = parent_element->computed_properties()->first_available_computed_font().pixel_metrics();
     else
-        font_pixel_metrics = Platform::FontPlugin::the().default_font().pixel_metrics();
+        font_pixel_metrics = Platform::FontPlugin::the().default_font(font_size_in_px.to_float())->pixel_metrics();
     auto parent_font_size = [&]() -> CSSPixels {
         if (!parent_element || !parent_element->computed_properties())
             return font_size_in_px;
@@ -1912,9 +1917,6 @@ RefPtr<Gfx::FontCascadeList const> StyleComputer::compute_font_for_style_values(
 
     // FIXME: Implement the full font-matching algorithm: https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm
 
-    // Note: This is modified by the find_font() lambda
-    bool monospace = false;
-
     float const font_size_in_pt = font_size_in_px * 0.75f;
 
     auto find_font = [&](FlyString const& family) -> RefPtr<Gfx::FontCascadeList const> {
@@ -1951,7 +1953,6 @@ RefPtr<Gfx::FontCascadeList const> StyleComputer::compute_font_for_style_values(
         case Keyword::Monospace:
         case Keyword::UiMonospace:
             generic_font = Platform::GenericFont::Monospace;
-            monospace = true;
             break;
         case Keyword::Serif:
             generic_font = Platform::GenericFont::Serif;
@@ -2006,12 +2007,20 @@ RefPtr<Gfx::FontCascadeList const> StyleComputer::compute_font_for_style_values(
             font_list->extend(*other_font_list);
     }
 
+    auto default_font = Platform::FontPlugin::the().default_font(font_size_in_pt);
+    if (font_list->is_empty()) {
+        // This is needed to make sure we check default font before reaching to emojis.
+        font_list->add(*default_font);
+    }
+
     if (auto emoji_font = Platform::FontPlugin::the().default_emoji_font(font_size_in_pt); emoji_font) {
         font_list->add(*emoji_font);
     }
 
-    auto found_font = ComputedProperties::font_fallback(monospace, bold);
-    font_list->set_last_resort_font(found_font->with_size(font_size_in_pt));
+    // The default font is already included in the font list, but we explicitly set it
+    // as the last-resort font. This ensures that if none of the specified fonts contain
+    // the requested code point, there is still a font available to provide a fallback glyph.
+    font_list->set_last_resort_font(*default_font);
 
     return font_list;
 }
@@ -2066,7 +2075,7 @@ void StyleComputer::compute_font(ComputedProperties& style, DOM::Element const* 
 Gfx::Font const& StyleComputer::initial_font() const
 {
     // FIXME: This is not correct.
-    return ComputedProperties::font_fallback(false, false);
+    return ComputedProperties::font_fallback(false, false, 12);
 }
 
 void StyleComputer::absolutize_values(ComputedProperties& style) const
@@ -2294,7 +2303,8 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::Element& elem
 
     // 1. Perform the cascade. This produces the "specified style"
     bool did_match_any_pseudo_element_rules = false;
-    auto cascaded_properties = compute_cascaded_values(element, pseudo_element, did_match_any_pseudo_element_rules, mode);
+    bool did_match_any_hover_rules = false;
+    auto cascaded_properties = compute_cascaded_values(element, pseudo_element, did_match_any_pseudo_element_rules, did_match_any_hover_rules, mode);
 
     element.set_cascaded_properties(pseudo_element, cascaded_properties);
 
@@ -2327,7 +2337,10 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::Element& elem
         }
     }
 
-    return compute_properties(element, pseudo_element, cascaded_properties);
+    auto computed_properties = compute_properties(element, pseudo_element, cascaded_properties);
+    if (did_match_any_hover_rules)
+        computed_properties->set_did_match_any_hover_rules();
+    return computed_properties;
 }
 
 GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& element, Optional<Selector::PseudoElement::Type> pseudo_element, CascadedProperties& cascaded_properties) const
@@ -2410,7 +2423,8 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
                 animation->play().release_value_but_fixme_should_propagate_errors();
             } else {
                 // The animation hasn't changed, but some properties of the animation may have
-                apply_animation_properties(m_document, cascaded_properties, *element.cached_animation_name_animation(pseudo_element));
+                if (auto animation = element.cached_animation_name_animation(pseudo_element); animation)
+                    apply_animation_properties(m_document, cascaded_properties, *animation);
             }
         }
     } else {
@@ -2531,7 +2545,7 @@ void StyleComputer::collect_selector_insights(Selector const& selector, Selector
     }
 }
 
-NonnullOwnPtr<StyleComputer::RuleCache> StyleComputer::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, SelectorInsights& insights)
+NonnullOwnPtr<StyleComputer::RuleCache> StyleComputer::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, SelectorInsights& insights, Vector<MatchingRule>& hover_rules)
 {
     auto rule_cache = make<RuleCache>();
 
@@ -2612,6 +2626,10 @@ NonnullOwnPtr<StyleComputer::RuleCache> StyleComputer::make_rule_cache_for_casca
                             }
                         }
                     }
+                }
+
+                if (selector.contains_hover_pseudo_class()) {
+                    hover_rules.append(matching_rule);
                 }
 
                 // NOTE: We traverse the simple selectors in reverse order to make sure that class/ID buckets are preferred over tag buckets
@@ -2825,9 +2843,9 @@ void StyleComputer::build_rule_cache()
 
     build_qualified_layer_names_cache();
 
-    m_author_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::Author, *m_selector_insights);
-    m_user_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::User, *m_selector_insights);
-    m_user_agent_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::UserAgent, *m_selector_insights);
+    m_author_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::Author, *m_selector_insights, m_hover_rules);
+    m_user_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::User, *m_selector_insights, m_hover_rules);
+    m_user_agent_rule_cache = make_rule_cache_for_cascade_origin(CascadeOrigin::UserAgent, *m_selector_insights, m_hover_rules);
 }
 
 void StyleComputer::invalidate_rule_cache()
@@ -2843,6 +2861,8 @@ void StyleComputer::invalidate_rule_cache()
     // NOTE: It might not be necessary to throw away the UA rule cache.
     //       If we are sure that it's safe, we could keep it as an optimization.
     m_user_agent_rule_cache = nullptr;
+
+    m_hover_rules.clear_with_capacity();
 }
 
 void StyleComputer::did_load_font(FlyString const&)
@@ -3011,20 +3031,28 @@ size_t StyleComputer::number_of_css_font_faces_with_loading_in_progress() const
 
 bool StyleComputer::has_has_selectors() const
 {
+    if (!document().is_active())
+        return false;
+
     build_rule_cache_if_needed();
     return m_selector_insights->has_has_selectors;
 }
 
 bool StyleComputer::has_defined_selectors() const
 {
+    if (!document().is_active())
+        return false;
+
     build_rule_cache_if_needed();
     return m_selector_insights->has_defined_selectors;
 }
 
 bool StyleComputer::has_attribute_selector(FlyString const& attribute_name) const
 {
-    build_rule_cache_if_needed();
+    if (!document().is_active())
+        return false;
 
+    build_rule_cache_if_needed();
     return m_selector_insights->all_names_used_in_attribute_selectors.contains(attribute_name);
 }
 

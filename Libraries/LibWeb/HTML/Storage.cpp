@@ -1,26 +1,39 @@
 /*
  * Copyright (c) 2022, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2023, Luke Wilde <lukew@serenityos.org>
+ * Copyright (c) 2024-2025, Shannon Booth <shannon@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/String.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/StoragePrototype.h>
 #include <LibWeb/HTML/Storage.h>
+#include <LibWeb/HTML/StorageEvent.h>
+#include <LibWeb/HTML/Window.h>
 
 namespace Web::HTML {
 
 GC_DEFINE_ALLOCATOR(Storage);
 
-GC::Ref<Storage> Storage::create(JS::Realm& realm)
+static HashTable<GC::RawRef<Storage>>& all_storages()
 {
-    return realm.create<Storage>(realm);
+    // FIXME: This needs to be stored at the user agent level.
+    static HashTable<GC::RawRef<Storage>> storages;
+    return storages;
 }
 
-Storage::Storage(JS::Realm& realm)
+GC::Ref<Storage> Storage::create(JS::Realm& realm, Type type, NonnullRefPtr<StorageAPI::StorageBottle> storage_bottle)
+{
+    return realm.create<Storage>(realm, type, move(storage_bottle));
+}
+
+Storage::Storage(JS::Realm& realm, Type type, NonnullRefPtr<StorageAPI::StorageBottle> storage_bottle)
     : Bindings::PlatformObject(realm)
+    , m_type(type)
+    , m_storage_bottle(move(storage_bottle))
 {
     m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
         .supports_indexed_properties = true,
@@ -32,6 +45,8 @@ Storage::Storage(JS::Realm& realm)
         .named_property_setter_has_identifier = true,
         .named_property_deleter_has_identifier = true,
     };
+
+    all_storages().set(*this);
 }
 
 Storage::~Storage() = default;
@@ -42,22 +57,27 @@ void Storage::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(Storage);
 }
 
+void Storage::finalize()
+{
+    all_storages().remove(*this);
+}
+
 // https://html.spec.whatwg.org/multipage/webstorage.html#dom-storage-length
 size_t Storage::length() const
 {
     // The length getter steps are to return this's map's size.
-    return m_map.size();
+    return map().size();
 }
 
 // https://html.spec.whatwg.org/multipage/webstorage.html#dom-storage-key
 Optional<String> Storage::key(size_t index)
 {
     // 1. If index is greater than or equal to this's map's size, then return null.
-    if (index >= m_map.size())
+    if (index >= map().size())
         return {};
 
     // 2. Let keys be the result of running get the keys on this's map.
-    auto keys = m_map.keys();
+    auto keys = map().keys();
 
     // 3. Return keys[index].
     return keys[index];
@@ -67,8 +87,8 @@ Optional<String> Storage::key(size_t index)
 Optional<String> Storage::get_item(StringView key) const
 {
     // 1. If this's map[key] does not exist, then return null.
-    auto it = m_map.find(key);
-    if (it == m_map.end())
+    auto it = map().find(key);
+    if (it == map().end())
         return {};
 
     // 2. Return this's map[key].
@@ -78,14 +98,17 @@ Optional<String> Storage::get_item(StringView key) const
 // https://html.spec.whatwg.org/multipage/webstorage.html#dom-storage-setitem
 WebIDL::ExceptionOr<void> Storage::set_item(String const& key, String const& value)
 {
+    auto& realm = this->realm();
+
     // 1. Let oldValue be null.
-    String old_value;
+    Optional<String> old_value;
 
     // 2. Let reorder be true.
     bool reorder = true;
 
     // 3. If this's map[key] exists:
-    if (auto it = m_map.find(key); it != m_map.end()) {
+    auto new_size = m_stored_bytes;
+    if (auto it = map().find(key); it != map().end()) {
         // 1. Set oldValue to this's map[key].
         old_value = it->value;
 
@@ -95,12 +118,18 @@ WebIDL::ExceptionOr<void> Storage::set_item(String const& key, String const& val
 
         // 3. Set reorder to false.
         reorder = false;
+    } else {
+        new_size += key.bytes().size();
     }
 
-    // FIXME: 4. If value cannot be stored, then throw a "QuotaExceededError" DOMException exception.
+    // 4. If value cannot be stored, then throw a "QuotaExceededError" DOMException exception.
+    new_size += value.bytes().size() - old_value.value_or(String {}).bytes().size();
+    if (m_storage_bottle->quota.has_value() && new_size > *m_storage_bottle->quota)
+        return WebIDL::QuotaExceededError::create(realm, MUST(String::formatted("Unable to store more than {} bytes in storage"sv, *m_storage_bottle->quota)));
 
     // 5. Set this's map[key] to value.
-    m_map.set(key, value);
+    map().set(key, value);
+    m_stored_bytes = new_size;
 
     // 6. If reorder is true, then reorder this.
     if (reorder)
@@ -113,19 +142,19 @@ WebIDL::ExceptionOr<void> Storage::set_item(String const& key, String const& val
 }
 
 // https://html.spec.whatwg.org/multipage/webstorage.html#dom-storage-removeitem
-void Storage::remove_item(StringView key)
+void Storage::remove_item(String const& key)
 {
-    // 1. If this's map[key] does not exist, then return null.
-    // FIXME: Return null?
-    auto it = m_map.find(key);
-    if (it == m_map.end())
+    // 1. If this's map[key] does not exist, then return.
+    auto it = map().find(key);
+    if (it == map().end())
         return;
 
     // 2. Set oldValue to this's map[key].
     auto old_value = it->value;
 
     // 3. Remove this's map[key].
-    m_map.remove(it);
+    map().remove(it);
+    m_stored_bytes = m_stored_bytes - key.bytes().size() - old_value.bytes().size();
 
     // 4. Reorder this.
     reorder();
@@ -138,7 +167,7 @@ void Storage::remove_item(StringView key)
 void Storage::clear()
 {
     // 1. Clear this's map.
-    m_map.clear();
+    map().clear();
 
     // 2. Broadcast this with null, null, and null.
     broadcast({}, {}, {});
@@ -152,20 +181,71 @@ void Storage::reorder()
 }
 
 // https://html.spec.whatwg.org/multipage/webstorage.html#concept-storage-broadcast
-void Storage::broadcast(StringView key, StringView old_value, StringView new_value)
+void Storage::broadcast(Optional<String> const& key, Optional<String> const& old_value, Optional<String> const& new_value)
 {
-    (void)key;
-    (void)old_value;
-    (void)new_value;
-    // FIXME: Implement.
+    auto& realm = this->realm();
+
+    // 1. Let thisDocument be storage's relevant global object's associated Document.
+    auto& relevant_global = relevant_global_object(*this);
+    auto const& this_document = verify_cast<Window>(relevant_global).associated_document();
+
+    // 2. Let url be the serialization of thisDocument's URL.
+    auto url = this_document.url().serialize();
+
+    // 3. Let remoteStorages be all Storage objects excluding storage whose:
+    GC::RootVector<GC::Ref<Storage>> remote_storages(heap());
+    for (auto storage : all_storages()) {
+        if (storage == this)
+            continue;
+
+        // * type is storage's type
+        if (storage->type() != type())
+            continue;
+
+        // * relevant settings object's origin is same origin with storage's relevant settings object's origin.
+        if (!relevant_settings_object(*this).origin().is_same_origin(relevant_settings_object(storage).origin()))
+            continue;
+
+        // * and, if type is "session", whose relevant settings object's associated Document's node navigable's traversable navigable
+        //   is thisDocument's node navigable's traversable navigable.
+        if (type() == Type::Session) {
+            auto& storage_document = *relevant_settings_object(storage).responsible_document();
+
+            // NOTE: It is possible the remote storage may have not been fully teared down immediately at the point it's document is made inactive.
+            if (!storage_document.navigable())
+                continue;
+            VERIFY(this_document.navigable());
+
+            if (storage_document.navigable()->traversable_navigable() != this_document.navigable()->traversable_navigable())
+                continue;
+        }
+
+        remote_storages.append(storage);
+    }
+
+    // 4. For each remoteStorage of remoteStorages: queue a global task on the DOM manipulation task source given remoteStorage's relevant
+    //    global object to fire an event named storage at remoteStorage's relevant global object, using StorageEvent, with key initialized
+    //    to key, oldValue initialized to oldValue, newValue initialized to newValue, url initialized to url, and storageArea initialized to
+    //    remoteStorage.
+    for (auto remote_storage : remote_storages) {
+        queue_global_task(Task::Source::DOMManipulation, relevant_global, GC::create_function(heap(), [&realm, key, old_value, new_value, url, remote_storage] {
+            StorageEventInit init;
+            init.key = move(key);
+            init.old_value = move(old_value);
+            init.new_value = move(new_value);
+            init.url = move(url);
+            init.storage_area = remote_storage;
+            verify_cast<Window>(relevant_global_object(remote_storage)).dispatch_event(StorageEvent::create(realm, EventNames::storage, init));
+        }));
+    }
 }
 
 Vector<FlyString> Storage::supported_property_names() const
 {
     // The supported property names on a Storage object storage are the result of running get the keys on storage's map.
     Vector<FlyString> names;
-    names.ensure_capacity(m_map.size());
-    for (auto const& key : m_map.keys())
+    names.ensure_capacity(map().size());
+    for (auto const& key : map().keys())
         names.unchecked_append(key);
     return names;
 }
@@ -213,9 +293,9 @@ WebIDL::ExceptionOr<void> Storage::set_value_of_named_property(String const& key
 
 void Storage::dump() const
 {
-    dbgln("Storage ({} key(s))", m_map.size());
+    dbgln("Storage ({} key(s))", map().size());
     size_t i = 0;
-    for (auto const& it : m_map) {
+    for (auto const& it : map()) {
         dbgln("[{}] \"{}\": \"{}\"", i, it.key, it.value);
         ++i;
     }

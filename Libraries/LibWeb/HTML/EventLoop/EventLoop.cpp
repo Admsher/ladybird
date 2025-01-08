@@ -11,6 +11,7 @@
 #include <LibWeb/CSS/FontFaceSet.h>
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Element.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
@@ -20,6 +21,7 @@
 #include <LibWeb/HighResolutionTime/Performance.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
 #include <LibWeb/Page/Page.h>
+#include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/Timer.h>
 
@@ -249,6 +251,7 @@ void EventLoop::queue_task_to_update_the_rendering()
     }
 }
 
+// https://html.spec.whatwg.org/#update-the-rendering
 void EventLoop::update_the_rendering()
 {
     VERIFY(!m_is_running_rendering_task);
@@ -335,9 +338,36 @@ void EventLoop::update_the_rendering()
             // NOTE: Recalculation of styles is handled by update_layout()
             document->update_layout();
 
-            // FIXME: 2. Let hadInitialVisibleContentVisibilityDetermination be false.
-            // FIXME: 3. For each element element with 'auto' used value of 'content-visibility':
-            // FIXME: 4. If hadInitialVisibleContentVisibilityDetermination is true, then continue.
+            // 2. Let hadInitialVisibleContentVisibilityDetermination be false.
+            bool had_initial_visible_content_visibility_determination = false;
+
+            // 3. For each element element with 'auto' used value of 'content-visibility':
+            auto* document_element = document->document_element();
+            if (document_element) {
+                document_element->for_each_in_inclusive_subtree_of_type<Web::DOM::Element>([&](auto& element) {
+                    auto const& paintable_box = element.paintable_box();
+                    if (!paintable_box || paintable_box->computed_values().content_visibility() != CSS::ContentVisibility::Auto) {
+                        return TraversalDecision::Continue;
+                    }
+
+                    // 1. Let checkForInitialDetermination be true if element's proximity to the viewport is not determined and it is not relevant to the user. Otherwise, let checkForInitialDetermination be false.
+                    bool check_for_initial_determination = element.proximity_to_the_viewport() == Web::DOM::ProximityToTheViewport::NotDetermined && !element.is_relevant_to_the_user();
+
+                    // 2. Determine proximity to the viewport for element.
+                    element.determine_proximity_to_the_viewport();
+
+                    // 3. If checkForInitialDetermination is true and element is now relevant to the user, then set hadInitialVisibleContentVisibilityDetermination to true.
+                    if (check_for_initial_determination && element.is_relevant_to_the_user()) {
+                        had_initial_visible_content_visibility_determination = true;
+                    }
+
+                    return TraversalDecision::Continue;
+                });
+            }
+
+            // 4. If hadInitialVisibleContentVisibilityDetermination is true, then continue.
+            if (had_initial_visible_content_visibility_determination)
+                continue;
 
             // 5. Gather active resize observations at depth resizeObserverDepth for doc.
             document->gather_active_observations_at_depth(resize_observer_depth);
@@ -473,6 +503,10 @@ void perform_a_microtask_checkpoint()
 // https://html.spec.whatwg.org/#perform-a-microtask-checkpoint
 void EventLoop::perform_a_microtask_checkpoint()
 {
+    // NOTE: This assertion is per requirement 9.5 of the ECMA-262 spec, see: https://tc39.es/ecma262/#sec-jobs
+    // > At some future point in time, when there is no running context in the agent for which the job is scheduled and that agent's execution context stack is empty...
+    VERIFY(vm().execution_context_stack().is_empty());
+
     // 1. If the event loop's performing a microtask checkpoint is true, then return.
     if (m_performing_a_microtask_checkpoint)
         return;

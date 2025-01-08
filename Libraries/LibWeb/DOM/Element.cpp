@@ -67,6 +67,7 @@
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Painting/ViewportPaintable.h>
+#include <LibWeb/Selection/Selection.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -96,6 +97,7 @@ void Element::visit_edges(Cell::Visitor& visitor)
     SlottableMixin::visit_edges(visitor);
     Animatable::visit_edges(visitor);
 
+    visitor.visit(m_aria_active_descendant_element);
     visitor.visit(m_attributes);
     visitor.visit(m_inline_style);
     visitor.visit(m_class_list);
@@ -203,6 +205,8 @@ WebIDL::ExceptionOr<void> Element::set_attribute(FlyString const& name, String c
 // https://dom.spec.whatwg.org/#validate-and-extract
 WebIDL::ExceptionOr<QualifiedName> validate_and_extract(JS::Realm& realm, Optional<FlyString> namespace_, FlyString const& qualified_name)
 {
+    // To validate and extract a namespace and qualifiedName, run these steps:
+
     // 1. If namespace is the empty string, then set it to null.
     if (namespace_.has_value() && namespace_.value().is_empty())
         namespace_ = {};
@@ -216,11 +220,17 @@ WebIDL::ExceptionOr<QualifiedName> validate_and_extract(JS::Realm& realm, Option
     // 4. Let localName be qualifiedName.
     auto local_name = qualified_name;
 
-    // 5. If qualifiedName contains a U+003A (:), then strictly split the string on it and set prefix to the part before and localName to the part after.
+    // 5. If qualifiedName contains a U+003A (:):
     if (qualified_name.bytes_as_string_view().contains(':')) {
-        auto parts = qualified_name.bytes_as_string_view().split_view(':');
-        prefix = MUST(FlyString::from_utf8(parts[0]));
-        local_name = MUST(FlyString::from_utf8(parts[1]));
+        // 1. Let splitResult be the result of running strictly split given qualifiedName and U+003A (:).
+        // FIXME: Use the "strictly split" algorithm
+        auto split_result = qualified_name.bytes_as_string_view().split_view(':');
+
+        // 2. Set prefix to splitResult[0].
+        prefix = MUST(FlyString::from_utf8(split_result[0]));
+
+        // 3. Set localName to splitResult[1].
+        local_name = MUST(FlyString::from_utf8(split_result[1]));
     }
 
     // 6. If prefix is non-null and namespace is null, then throw a "NamespaceError" DOMException.
@@ -732,7 +742,8 @@ WebIDL::ExceptionOr<bool> Element::matches(StringView selectors) const
     // 3. If the result of match a selector against an element, using s, this, and scoping root this, returns success, then return true; otherwise, return false.
     auto sel = maybe_selectors.value();
     for (auto& s : sel) {
-        if (SelectorEngine::matches(s, {}, *this, nullptr, {}, static_cast<ParentNode const*>(this)))
+        SelectorEngine::MatchContext context;
+        if (SelectorEngine::matches(s, *this, nullptr, context, {}, static_cast<ParentNode const*>(this)))
             return true;
     }
     return false;
@@ -751,7 +762,8 @@ WebIDL::ExceptionOr<DOM::Element const*> Element::closest(StringView selectors) 
     auto matches_selectors = [this](CSS::SelectorList const& selector_list, Element const* element) {
         // 4. For each element in elements, if match a selector against an element, using s, element, and scoping root this, returns success, return element.
         for (auto const& selector : selector_list) {
-            if (SelectorEngine::matches(selector, {}, *element, nullptr, {}, this))
+            SelectorEngine::MatchContext context;
+            if (SelectorEngine::matches(selector, *element, nullptr, context, {}, this))
                 return true;
         }
         return false;
@@ -1111,6 +1123,22 @@ GC::Ptr<Layout::NodeWithStyle> Element::get_pseudo_element_node(CSS::Selector::P
     if (auto element_data = get_pseudo_element(pseudo_element); element_data.has_value())
         return element_data->layout_node;
     return nullptr;
+}
+
+bool Element::affected_by_hover() const
+{
+    if (m_computed_properties && m_computed_properties->did_match_any_hover_rules()) {
+        return true;
+    }
+    if (m_pseudo_element_data) {
+        for (auto& pseudo_element : *m_pseudo_element_data) {
+            if (!pseudo_element.computed_properties)
+                continue;
+            if (pseudo_element.computed_properties->did_match_any_hover_rules())
+                return true;
+        }
+    }
+    return false;
 }
 
 bool Element::has_pseudo_elements() const
@@ -1517,18 +1545,17 @@ WebIDL::ExceptionOr<GC::Ref<DOM::DocumentFragment>> Element::parse_fragment(Stri
         dbgln("FIXME: Handle fragment parsing of XML documents");
     }
 
-    // 3. Let new children be the result of invoking algorithm given markup, with context set to context.
+    // 3. Let newChildren be the result of invoking algorithm given context and markup.
     auto new_children = algorithm(*this, markup, HTML::HTMLParser::AllowDeclarativeShadowRoots::No);
 
     // 4. Let fragment be a new DocumentFragment whose node document is context's node document.
     auto fragment = realm().create<DOM::DocumentFragment>(document());
 
-    // 5. Append each Node in new children to fragment (in tree order).
-    for (auto& child : new_children) {
-        // I don't know if this can throw here, but let's be safe.
-        (void)TRY(fragment->append_child(*child));
-    }
+    // 5. For each node of newChildren, in tree order: append node to fragment.
+    for (auto& child : new_children)
+        TRY(fragment->append_child(*child));
 
+    // 6. Return fragment.
     return fragment;
 }
 
@@ -2107,7 +2134,7 @@ void Element::enqueue_a_custom_element_upgrade_reaction(HTML::CustomElementDefin
     enqueue_an_element_on_the_appropriate_element_queue();
 }
 
-void Element::enqueue_a_custom_element_callback_reaction(FlyString const& callback_name, GC::MarkedVector<JS::Value> arguments)
+void Element::enqueue_a_custom_element_callback_reaction(FlyString const& callback_name, GC::RootVector<JS::Value> arguments)
 {
     // 1. Let definition be element's custom element definition.
     auto& definition = m_custom_element_definition;
@@ -2164,7 +2191,7 @@ JS::ThrowCompletionOr<void> Element::upgrade_element(GC::Ref<HTML::CustomElement
         auto const* attribute = m_attributes->item(attribute_index);
         VERIFY(attribute);
 
-        GC::MarkedVector<JS::Value> arguments { vm.heap() };
+        GC::RootVector<JS::Value> arguments { vm.heap() };
 
         arguments.append(JS::PrimitiveString::create(vm, attribute->local_name()));
         arguments.append(JS::js_null());
@@ -2176,12 +2203,12 @@ JS::ThrowCompletionOr<void> Element::upgrade_element(GC::Ref<HTML::CustomElement
 
     // 5. If element is connected, then enqueue a custom element callback reaction with element, callback name "connectedCallback", and « ».
     if (is_connected()) {
-        GC::MarkedVector<JS::Value> empty_arguments { vm.heap() };
+        GC::RootVector<JS::Value> empty_arguments { vm.heap() };
         enqueue_a_custom_element_callback_reaction(HTML::CustomElementReactionNames::connectedCallback, move(empty_arguments));
     }
 
     // 6. Add element to the end of definition's construction stack.
-    custom_element_definition->construction_stack().append(GC::make_root(this));
+    custom_element_definition->construction_stack().append(GC::Ref { *this });
 
     // 7. Let C be definition's constructor.
     auto& constructor = custom_element_definition->constructor();
@@ -2598,6 +2625,73 @@ bool Element::check_visibility(Optional<CheckVisibilityOptions> options)
     return true;
 }
 
+// https://drafts.csswg.org/css-contain/#proximity-to-the-viewport
+void Element::determine_proximity_to_the_viewport()
+{
+    // An element that has content-visibility: auto is in one of three states when it comes to its proximity to the viewport:
+
+    // - The element is close to the viewport: In this state, the element is considered "on-screen": its paint
+    //   containment box's overflow clip edge intersects with the viewport, or a user-agent defined margin around the
+    //   viewport.
+    auto viewport_rect = document().viewport_rect();
+    // NOTE: This margin is meant to allow the user agent to begin preparing for an element to be in the
+    // viewport soon. A margin of 50% is suggested as a reasonable default.
+    viewport_rect.inflate(viewport_rect.width(), viewport_rect.height());
+    // FIXME: We don't have paint containment or the overflow clip edge yet, so this is just using the absolute rect for now.
+    if (paintable_box()->absolute_rect().intersects(viewport_rect))
+        m_proximity_to_the_viewport = ProximityToTheViewport::CloseToTheViewport;
+
+    // FIXME: If a filter (see [FILTER-EFFECTS-1]) with non local effects includes the element as part of its input, the user
+    //        agent should also treat the element as relevant to the user when the filter’s output can affect the rendering
+    //        within the viewport (or within the user-agent defined margin around the viewport), even if the element itself is
+    //        still off-screen.
+
+    // - The element is far away from the viewport: In this state, the element’s proximity to the viewport has been
+    //   computed and is not close to the viewport.
+    m_proximity_to_the_viewport = ProximityToTheViewport::FarAwayFromTheViewport;
+
+    // - The element’s proximity to the viewport is not determined: In this state, the computation to determine the
+    //   element’s proximity to the viewport has not been done since the last time the element was connected.
+    // NOTE: This function is what does the computation to determine the element’s proximity to the viewport, so this is not the case.
+}
+
+// https://drafts.csswg.org/css-contain/#relevant-to-the-user
+bool Element::is_relevant_to_the_user()
+{
+    // An element is relevant to the user if any of the following conditions are true:
+
+    // The element is close to the viewport.
+    if (m_proximity_to_the_viewport == ProximityToTheViewport::CloseToTheViewport)
+        return true;
+
+    // Either the element or its contents are focused, as described in the focus section of the HTML spec.
+    auto* focused_element = document().focused_element();
+    if (focused_element && is_inclusive_ancestor_of(*focused_element))
+        return true;
+
+    // Either the element or its contents are selected, where selection is described in the selection API.
+    if (document().get_selection()->contains_node(*this, true))
+        return true;
+
+    // Either the element or its contents are placed in the top layer.
+    bool is_in_top_layer = false;
+    for_each_in_inclusive_subtree_of_type<Element>([&](auto& element) {
+        if (element.in_top_layer()) {
+            is_in_top_layer = true;
+            return TraversalDecision::Break;
+        }
+
+        return TraversalDecision::Continue;
+    });
+    if (is_in_top_layer)
+        return true;
+
+    // FIXME: The element has a flat tree descendant that is captured in a view transition.
+
+    // NOTE: none of the above conditions are true, so the element is not relevant to the user.
+    return false;
+}
+
 bool Element::id_reference_exists(String const& id_reference) const
 {
     return document().get_element_by_id(id_reference);
@@ -2926,6 +3020,10 @@ void Element::attribute_changed(FlyString const& local_name, Optional<String> co
             m_dir = Dir::Auto;
         else
             m_dir = {};
+    } else if (local_name == ARIA::AttributeNames::aria_active_descendant) {
+        // https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#reflecting-content-attributes-in-idl-attributes:concept-element-attributes-change-ext
+        // Set element's explicitly set attr-element to null.
+        m_aria_active_descendant_element = nullptr;
     }
 }
 

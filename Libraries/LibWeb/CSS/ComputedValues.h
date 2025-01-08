@@ -22,6 +22,7 @@
 #include <LibWeb/CSS/GridTrackSize.h>
 #include <LibWeb/CSS/LengthBox.h>
 #include <LibWeb/CSS/PercentageOr.h>
+#include <LibWeb/CSS/PreferredColorScheme.h>
 #include <LibWeb/CSS/Ratio.h>
 #include <LibWeb/CSS/Size.h>
 #include <LibWeb/CSS/StyleValues/AbstractImageStyleValue.h>
@@ -76,6 +77,7 @@ public:
     static CSS::CaptionSide caption_side() { return CSS::CaptionSide::Top; }
     static CSS::Clear clear() { return CSS::Clear::None; }
     static CSS::Clip clip() { return CSS::Clip::make_auto(); }
+    static CSS::PreferredColorScheme color_scheme() { return CSS::PreferredColorScheme::Auto; }
     static CSS::ContentVisibility content_visibility() { return CSS::ContentVisibility::Visible; }
     static CSS::Cursor cursor() { return CSS::Cursor::Auto; }
     static CSS::WhiteSpace white_space() { return CSS::WhiteSpace::Normal; }
@@ -168,6 +170,7 @@ public:
     static CSS::Direction direction() { return CSS::Direction::Ltr; }
     static CSS::UnicodeBidi unicode_bidi() { return CSS::UnicodeBidi::Normal; }
     static CSS::WritingMode writing_mode() { return CSS::WritingMode::HorizontalTb; }
+    static CSS::UserSelect user_select() { return CSS::UserSelect::Auto; }
 
     // https://www.w3.org/TR/SVG/geometry.html
     static LengthPercentage cx() { return CSS::Length::make_px(0); }
@@ -351,6 +354,7 @@ public:
     CSS::CaptionSide caption_side() const { return m_inherited.caption_side; }
     CSS::Clear clear() const { return m_noninherited.clear; }
     CSS::Clip clip() const { return m_noninherited.clip; }
+    CSS::PreferredColorScheme color_scheme() const { return m_inherited.color_scheme; }
     CSS::ContentVisibility content_visibility() const { return m_inherited.content_visibility; }
     CSS::Cursor cursor() const { return m_inherited.cursor; }
     CSS::ContentData content() const { return m_noninherited.content; }
@@ -421,6 +425,7 @@ public:
     CSS::Direction direction() const { return m_inherited.direction; }
     CSS::UnicodeBidi unicode_bidi() const { return m_noninherited.unicode_bidi; }
     CSS::WritingMode writing_mode() const { return m_inherited.writing_mode; }
+    CSS::UserSelect user_select() const { return m_noninherited.user_select; }
 
     CSS::LengthBox const& inset() const { return m_noninherited.inset; }
     const CSS::LengthBox& margin() const { return m_noninherited.margin; }
@@ -543,6 +548,7 @@ protected:
         CSS::Length border_spacing_vertical { InitialValues::border_spacing() };
         CSS::CaptionSide caption_side { InitialValues::caption_side() };
         Color color { InitialValues::color() };
+        CSS::PreferredColorScheme color_scheme { InitialValues::color_scheme() };
         Optional<Color> accent_color {};
         Color webkit_text_fill_color { InitialValues::color() };
         CSS::ContentVisibility content_visibility { InitialValues::content_visibility() };
@@ -671,6 +677,8 @@ protected:
         CSS::ObjectFit object_fit { InitialValues::object_fit() };
         CSS::ObjectPosition object_position { InitialValues::object_position() };
         CSS::UnicodeBidi unicode_bidi { InitialValues::unicode_bidi() };
+        CSS::UserSelect user_select { InitialValues::user_select() };
+
         Optional<CSS::Transformation> rotate;
         Optional<CSS::Transformation> translate;
         Optional<CSS::Transformation> scale;
@@ -724,6 +732,7 @@ public:
     void set_border_spacing_vertical(CSS::Length border_spacing_vertical) { m_inherited.border_spacing_vertical = border_spacing_vertical; }
     void set_caption_side(CSS::CaptionSide caption_side) { m_inherited.caption_side = caption_side; }
     void set_color(Color color) { m_inherited.color = color; }
+    void set_color_scheme(CSS::PreferredColorScheme color_scheme) { m_inherited.color_scheme = color_scheme; }
     void set_clip(CSS::Clip const& clip) { m_noninherited.clip = clip; }
     void set_content(ContentData const& content) { m_noninherited.content = content; }
     void set_content_visibility(CSS::ContentVisibility content_visibility) { m_inherited.content_visibility = content_visibility; }
@@ -841,6 +850,7 @@ public:
     void set_direction(CSS::Direction value) { m_inherited.direction = value; }
     void set_unicode_bidi(CSS::UnicodeBidi value) { m_noninherited.unicode_bidi = value; }
     void set_writing_mode(CSS::WritingMode value) { m_inherited.writing_mode = value; }
+    void set_user_select(CSS::UserSelect value) { m_noninherited.user_select = value; }
 
     void set_fill(SVGPaint value) { m_inherited.fill = move(value); }
     void set_stroke(SVGPaint value) { m_inherited.stroke = move(value); }

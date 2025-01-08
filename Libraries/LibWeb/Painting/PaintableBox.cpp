@@ -415,7 +415,7 @@ void PaintableBox::paint(PaintContext& context, PaintPhase phase) const
         paint_inspector_rect(border_rect, Color::Green);
         paint_inspector_rect(content_rect, Color::Magenta);
 
-        auto& font = Platform::FontPlugin::the().default_font();
+        auto font = Platform::FontPlugin::the().default_font(12);
 
         StringBuilder builder;
         if (layout_node_with_style_and_box_metrics().dom_node())
@@ -427,12 +427,12 @@ void PaintableBox::paint(PaintContext& context, PaintPhase phase) const
         auto size_text_rect = border_rect;
         size_text_rect.set_y(border_rect.y() + border_rect.height());
         size_text_rect.set_top(size_text_rect.top());
-        size_text_rect.set_width(CSSPixels::nearest_value_for(font.width(size_text)) + 4);
-        size_text_rect.set_height(CSSPixels::nearest_value_for(font.pixel_size()) + 4);
+        size_text_rect.set_width(CSSPixels::nearest_value_for(font->width(size_text)) + 4);
+        size_text_rect.set_height(CSSPixels::nearest_value_for(font->pixel_size()) + 4);
         auto size_text_device_rect = context.enclosing_device_rect(size_text_rect).to_type<int>();
         context.display_list_recorder().fill_rect(size_text_device_rect, context.palette().color(Gfx::ColorRole::Tooltip));
         context.display_list_recorder().draw_rect(size_text_device_rect, context.palette().threed_shadow1());
-        context.display_list_recorder().draw_text(size_text_device_rect, size_text, font.with_size(font.point_size() * context.device_pixels_per_css_pixel()), Gfx::TextAlignment::Center, context.palette().color(Gfx::ColorRole::TooltipText));
+        context.display_list_recorder().draw_text(size_text_device_rect, size_text, font->with_size(font->point_size() * context.device_pixels_per_css_pixel()), Gfx::TextAlignment::Center, context.palette().color(Gfx::ColorRole::TooltipText));
     }
 }
 
@@ -692,10 +692,10 @@ void paint_text_fragment(PaintContext& context, TextPaintable const& paintable, 
 
         auto selection_rect = context.enclosing_device_rect(fragment.selection_rect()).to_type<int>();
         if (!selection_rect.is_empty()) {
-            painter.fill_rect(selection_rect, CSS::SystemColor::highlight());
+            painter.fill_rect(selection_rect, CSS::SystemColor::highlight(paintable.computed_values().color_scheme()));
             DisplayListRecorderStateSaver saver(painter);
             painter.add_clip_rect(selection_rect);
-            painter.draw_text_run(baseline_start, *glyph_run, CSS::SystemColor::highlight_text(), fragment_absolute_device_rect.to_type<int>(), scale, fragment.orientation());
+            painter.draw_text_run(baseline_start, *glyph_run, CSS::SystemColor::highlight_text(paintable.computed_values().color_scheme()), fragment_absolute_device_rect.to_type<int>(), scale, fragment.orientation());
         }
 
         paint_text_decoration(context, paintable, fragment);
@@ -924,16 +924,12 @@ TraversalDecision PaintableWithLines::hit_test(CSSPixelPoint position, HitTestTy
     auto position_adjusted_by_scroll_offset = position;
     position_adjusted_by_scroll_offset.translate_by(-cumulative_offset_of_enclosing_scroll_frame());
 
-    // NOTE: This CSSPixels -> Float -> CSSPixels conversion is because we can't AffineTransform::map() a CSSPixelPoint.
-    Gfx::FloatPoint offset_position {
-        (position_adjusted_by_scroll_offset.x() - transform_origin().x()).to_float(),
-        (position_adjusted_by_scroll_offset.y() - transform_origin().y()).to_float()
-    };
-    auto transformed_position_adjusted_by_scroll_offset = combined_css_transform().inverse().value_or({}).map(offset_position).to_type<CSSPixels>() + transform_origin();
-
     // TextCursor hit testing mode should be able to place cursor in contenteditable elements even if they are empty
-    auto is_editable = layout_node_with_style_and_box_metrics().dom_node() && layout_node_with_style_and_box_metrics().dom_node()->is_editable();
-    if (is_editable && m_fragments.is_empty() && !has_children() && type == HitTestType::TextCursor) {
+    if (m_fragments.is_empty()
+        && !has_children()
+        && type == HitTestType::TextCursor
+        && layout_node_with_style_and_box_metrics().dom_node()
+        && layout_node_with_style_and_box_metrics().dom_node()->is_editable()) {
         HitTestResult const hit_test_result {
             .paintable = const_cast<PaintableWithLines&>(*this),
             .index_in_node = 0,
@@ -947,6 +943,13 @@ TraversalDecision PaintableWithLines::hit_test(CSSPixelPoint position, HitTestTy
     if (!layout_node_with_style_and_box_metrics().children_are_inline() || m_fragments.is_empty()) {
         return PaintableBox::hit_test(position, type, callback);
     }
+
+    // NOTE: This CSSPixels -> Float -> CSSPixels conversion is because we can't AffineTransform::map() a CSSPixelPoint.
+    Gfx::FloatPoint offset_position {
+        (position_adjusted_by_scroll_offset.x() - transform_origin().x()).to_float(),
+        (position_adjusted_by_scroll_offset.y() - transform_origin().y()).to_float()
+    };
+    auto transformed_position_adjusted_by_scroll_offset = combined_css_transform().inverse().value_or({}).map(offset_position).to_type<CSSPixels>() + transform_origin();
 
     if (hit_test_scrollbars(transformed_position_adjusted_by_scroll_offset, callback) == TraversalDecision::Break)
         return TraversalDecision::Break;

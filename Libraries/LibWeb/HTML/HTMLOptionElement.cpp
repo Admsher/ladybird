@@ -68,6 +68,9 @@ void HTMLOptionElement::set_selected(bool selected)
 
 void HTMLOptionElement::set_selected_internal(bool selected)
 {
+    if (m_selected != selected)
+        invalidate_style(DOM::StyleInvalidationReason::HTMLOptionElementSelectedChange);
+
     m_selected = selected;
     if (selected)
         m_selectedness_update_index = m_next_selectedness_update_index++;
@@ -114,6 +117,13 @@ String HTMLOptionElement::label() const
 void HTMLOptionElement::set_label(String const& label)
 {
     MUST(set_attribute(HTML::AttributeNames::label, label));
+
+    // NOTE: This option's select element may need to show different contents now.
+    if (selected()) {
+        if (auto select_element = first_ancestor_of_type<HTMLSelectElement>()) {
+            select_element->update_inner_text_element({});
+        }
+    }
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-text

@@ -116,6 +116,7 @@ class BasicShapeStyleValue;
 class BorderRadiusStyleValue;
 class CalculatedStyleValue;
 class Clip;
+class ColorSchemeStyleValue;
 class ConicGradientStyleValue;
 class ContentStyleValue;
 class CounterDefinitionsStyleValue;
@@ -752,6 +753,12 @@ struct UnderlyingSource;
 namespace Web::StorageAPI {
 class NavigatorStorage;
 class StorageManager;
+class StorageShed;
+
+struct StorageBottle;
+struct StorageBucket;
+struct StorageEndpoint;
+struct StorageShelf;
 }
 
 namespace Web::SVG {

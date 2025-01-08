@@ -7,7 +7,7 @@
 
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
-#include <LibGC/MarkedVector.h>
+#include <LibGC/RootVector.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/PropertyDescriptor.h>
 #include <LibJS/Runtime/PropertyKey.h>
@@ -413,7 +413,10 @@ WebIDL::ExceptionOr<void> Location::set_hash(String const& value)
     (void)URL::Parser::basic_parse(input, {}, &copy_url, URL::Parser::State::Fragment);
 
     // 7. If copyURL's fragment is this's url's fragment, then return.
-    if (copy_url.fragment() == this->url().fragment())
+    // NOTE: Ignore null values when comparing fragments. This behavior is not explicitly mentioned in the specs, potential bug?
+    auto copy_url_fragment = copy_url.fragment().has_value() ? copy_url.fragment() : String {};
+    auto this_url_fragment = this->url().fragment().has_value() ? this->url().fragment() : String {};
+    if (copy_url_fragment == this_url_fragment)
         return {};
 
     // 8. Location-object navigate this to copyURL.
@@ -596,7 +599,7 @@ JS::ThrowCompletionOr<bool> Location::internal_delete(JS::PropertyKey const& pro
 }
 
 // 7.10.5.10 [[OwnPropertyKeys]] ( ), https://html.spec.whatwg.org/multipage/history.html#location-ownpropertykeys
-JS::ThrowCompletionOr<GC::MarkedVector<JS::Value>> Location::internal_own_property_keys() const
+JS::ThrowCompletionOr<GC::RootVector<JS::Value>> Location::internal_own_property_keys() const
 {
     // 1. If IsPlatformObjectSameOrigin(this) is true, then return OrdinaryOwnPropertyKeys(this).
     if (HTML::is_platform_object_same_origin(*this))

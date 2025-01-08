@@ -986,12 +986,10 @@ WebIDL::ExceptionOr<GC::Ref<CryptoKey>> RSAOAEP::import_key(Web::Crypto::Algorit
             if (!meets_requirements)
                 return WebIDL::DataError::create(m_realm, "Invalid JWK private key"_string);
 
-            // FIXME: Spec error, it should say 'the RSA private key identified by interpreting jwk according to section 6.3.2'
-            // 2. Let privateKey represent the RSA public key identified by interpreting jwk according to Section 6.3.1 of JSON Web Algorithms [JWA].
+            // 2. Let privateKey represent the RSA private key identified by interpreting jwk according to Section 6.3.2 of JSON Web Algorithms [JWA].
             auto private_key = TRY(parse_jwk_rsa_private_key(realm, jwk));
 
-            // FIXME: Spec error, it should say 'not to be a valid RSA private key'
-            // 3. If privateKey can be determined to not be a valid RSA public key according to [RFC3447], then throw a DataError.
+            // 3. If privateKey can be determined to not be a valid RSA private key according to [RFC3447], then throw a DataError.
             // FIXME: Validate the private key
 
             // 4. Let key be a new CryptoKey representing privateKey.
@@ -6113,13 +6111,13 @@ static WebIDL::ExceptionOr<WebIDL::UnsignedLong> hmac_hash_block_size(JS::Realm&
 {
     auto hash_name = TRY(hash.name(realm.vm()));
     if (hash_name == "SHA-1")
-        return ::Crypto::Hash::SHA1::digest_size();
+        return ::Crypto::Hash::SHA1::block_size();
     if (hash_name == "SHA-256")
-        return ::Crypto::Hash::SHA256::digest_size();
+        return ::Crypto::Hash::SHA256::block_size();
     if (hash_name == "SHA-384")
-        return ::Crypto::Hash::SHA384::digest_size();
+        return ::Crypto::Hash::SHA384::block_size();
     if (hash_name == "SHA-512")
-        return ::Crypto::Hash::SHA512::digest_size();
+        return ::Crypto::Hash::SHA512::block_size();
     return WebIDL::NotSupportedError::create(realm, MUST(String::formatted("Invalid hash function '{}'", hash_name)));
 }
 
@@ -6168,7 +6166,7 @@ WebIDL::ExceptionOr<Variant<GC::Ref<CryptoKey>, GC::Ref<CryptoKeyPair>>> HMAC::g
     if (!normalized_algorithm.length.has_value()) {
         // Let length be the block size in bits of the hash function identified by the hash member
         // of normalizedAlgorithm.
-        length = TRY(hmac_hash_block_size(m_realm, normalized_algorithm.hash));
+        length = TRY(hmac_hash_block_size(m_realm, normalized_algorithm.hash)) * 8;
     }
 
     // Otherwise, if the length member of normalizedAlgorithm is non-zero:
@@ -6207,19 +6205,22 @@ WebIDL::ExceptionOr<Variant<GC::Ref<CryptoKey>, GC::Ref<CryptoKeyPair>>> HMAC::g
     // 10. Set the hash attribute of algorithm to hash.
     algorithm->set_hash(hash);
 
-    // 11. Set the [[type]] internal slot of key to "secret".
+    // 11. Set the length attribute of algorithm to length.
+    algorithm->set_length(length);
+
+    // 12. Set the [[type]] internal slot of key to "secret".
     key->set_type(Bindings::KeyType::Secret);
 
-    // 12. Set the [[algorithm]] internal slot of key to algorithm.
+    // 13. Set the [[algorithm]] internal slot of key to algorithm.
     key->set_algorithm(algorithm);
 
-    // 13. Set the [[extractable]] internal slot of key to be extractable.
+    // 14. Set the [[extractable]] internal slot of key to be extractable.
     key->set_extractable(extractable);
 
-    // 14. Set the [[usages]] internal slot of key to be usages.
+    // 15. Set the [[usages]] internal slot of key to be usages.
     key->set_usages(usages);
 
-    // 15. Return key.
+    // 16. Return key.
     return Variant<GC::Ref<CryptoKey>, GC::Ref<CryptoKeyPair>> { key };
 }
 
@@ -6487,7 +6488,7 @@ WebIDL::ExceptionOr<JS::Value> HMAC::get_key_length(AlgorithmParams const& param
     if (!normalized_derived_key_algorithm.length.has_value()) {
         // Let length be the block size in bits of the hash function identified by the hash member of
         // normalizedDerivedKeyAlgorithm.
-        length = TRY(hmac_hash_block_size(m_realm, normalized_derived_key_algorithm.hash));
+        length = TRY(hmac_hash_block_size(m_realm, normalized_derived_key_algorithm.hash)) * 8;
     }
 
     // Otherwise, if the length member of normalizedDerivedKeyAlgorithm is non-zero:

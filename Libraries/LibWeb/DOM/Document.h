@@ -174,6 +174,7 @@ public:
 
     virtual FlyString node_name() const override { return "#document"_fly_string; }
 
+    void invalidate_style_for_elements_affected_by_hover_change(Node& old_new_hovered_common_ancestor, GC::Ptr<Node> hovered_node);
     void set_hovered_node(Node*);
     Node* hovered_node() { return m_hovered_node.ptr(); }
     Node const* hovered_node() const { return m_hovered_node.ptr(); }
@@ -232,14 +233,19 @@ public:
     Color background_color() const;
     Vector<CSS::BackgroundLayerData> const* background_layers() const;
 
-    Color normal_link_color() const;
+    Optional<Color> normal_link_color() const;
     void set_normal_link_color(Color);
 
-    Color active_link_color() const;
+    Optional<Color> active_link_color() const;
     void set_active_link_color(Color);
 
-    Color visited_link_color() const;
+    Optional<Color> visited_link_color() const;
     void set_visited_link_color(Color);
+
+    Optional<Vector<String> const&> supported_color_schemes() const;
+    void obtain_supported_color_schemes();
+
+    void obtain_theme_color();
 
     void update_style();
     void update_layout();
@@ -318,6 +324,7 @@ public:
 
     QuirksMode mode() const { return m_quirks_mode; }
     bool in_quirks_mode() const { return m_quirks_mode == QuirksMode::Yes; }
+    bool in_limited_quirks_mode() const { return m_quirks_mode == QuirksMode::Limited; }
     void set_quirks_mode(QuirksMode mode) { m_quirks_mode = mode; }
 
     Type document_type() const { return m_type; }
@@ -662,7 +669,7 @@ public:
     WebIDL::ExceptionOr<void> set_design_mode(String const&);
 
     Element const* element_from_point(double x, double y);
-    GC::MarkedVector<GC::Ref<Element>> elements_from_point(double x, double y);
+    GC::RootVector<GC::Ref<Element>> elements_from_point(double x, double y);
     GC::Ptr<Element const> scrolling_element() const;
 
     void set_needs_to_resolve_paint_only_properties() { m_needs_to_resolve_paint_only_properties = true; }
@@ -760,6 +767,12 @@ public:
 
     GC::Ptr<DOM::Document> container_document() const;
 
+    GC::Ptr<HTML::Storage> session_storage_holder() { return m_session_storage_holder; }
+    void set_session_storage_holder(GC::Ptr<HTML::Storage> storage) { m_session_storage_holder = storage; }
+
+    GC::Ptr<HTML::Storage> local_storage_holder() { return m_local_storage_holder; }
+    void set_local_storage_holder(GC::Ptr<HTML::Storage> storage) { m_local_storage_holder = storage; }
+
 protected:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -785,6 +798,7 @@ private:
 
     Element* find_a_potential_indicated_element(FlyString const& fragment) const;
 
+    void dispatch_events_for_transition(GC::Ref<CSS::CSSTransition>);
     void dispatch_events_for_animation_if_necessary(GC::Ref<Animations::Animation>);
 
     template<typename GetNotifier, typename... Args>
@@ -819,6 +833,8 @@ private:
     Optional<Color> m_normal_link_color;
     Optional<Color> m_active_link_color;
     Optional<Color> m_visited_link_color;
+
+    Optional<Vector<String>> m_supported_color_schemes;
 
     GC::Ptr<HTML::HTMLParser> m_parser;
     bool m_active_parser_was_aborted { false };
@@ -1072,6 +1088,14 @@ private:
 
     // https://w3c.github.io/editing/docs/execCommand/#css-styling-flag
     bool m_css_styling_flag { false };
+
+    // https://html.spec.whatwg.org/multipage/webstorage.html#session-storage-holder
+    // A Document object has an associated session storage holder, which is null or a Storage object. It is initially null.
+    GC::Ptr<HTML::Storage> m_session_storage_holder;
+
+    // https://html.spec.whatwg.org/multipage/webstorage.html#local-storage-holder
+    // A Document object has an associated local storage holder, which is null or a Storage object. It is initially null.
+    GC::Ptr<HTML::Storage> m_local_storage_holder;
 };
 
 template<>

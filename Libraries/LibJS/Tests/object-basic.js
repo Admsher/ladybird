@@ -205,6 +205,23 @@ describe("shorthanded properties with special names", () => {
         expect('"use strict"; var await = 8; ({ await, })').toEval();
         expect('"use strict"; var async = 7; ({ async, })').toEval();
     });
+
+    test("async functions as properties", () => {
+        expect("({ async async() {} });").toEval();
+        expect('"use strict"; ({ async async() {} });').toEval();
+
+        expect("({ async async });").not.toEval();
+        expect("({ async async, });").not.toEval();
+        expect("({ async async() });").not.toEval();
+        expect("({ async async: 0 });").not.toEval();
+        expect("({ async async = 0 });").not.toEval();
+
+        expect("({ async foo });").not.toEval();
+        expect("({ async foo, });").not.toEval();
+        expect("({ async foo() });").not.toEval();
+        expect("({ async foo: 0 });").not.toEval();
+        expect("({ async foo = 0 });").not.toEval();
+    });
 });
 
 describe("errors", () => {

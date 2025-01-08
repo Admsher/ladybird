@@ -216,8 +216,7 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
     // NOTE: This isn't in the spec, but we require it.
     script_context->is_strict_mode = script_record.parse_node().is_strict_mode();
 
-    // FIXME: 9. Suspend the currently running execution context.
-
+    // 9. Suspend the currently running execution context.
     // 10. Push scriptContext onto the execution context stack; scriptContext is now the running execution context.
     TRY(vm.push_execution_context(*script_context, {}));
 
@@ -230,6 +229,7 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
 
     // 13. If result.[[Type]] is normal, then
     if (result.type() == Completion::Type::Normal) {
+        // a. Set result to Completion(Evaluation of script).
         auto executable_result = JS::Bytecode::Generator::generate_from_ast_node(vm, script, {});
 
         if (executable_result.is_error()) {
@@ -252,24 +252,22 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
             else
                 result = result_or_error.return_register_value;
         }
+
+        // b. If result is a normal completion and result.[[Value]] is empty, then
+        if (result.type() == Completion::Type::Normal && !result.value().has_value()) {
+            // i. Set result to NormalCompletion(undefined).
+            result = normal_completion(js_undefined());
+        }
     }
 
-    // 14. If result.[[Type]] is normal and result.[[Value]] is empty, then
-    if (result.type() == Completion::Type::Normal && !result.value().has_value()) {
-        // a. Set result to NormalCompletion(undefined).
-        result = normal_completion(js_undefined());
-    }
-
-    // FIXME: 15. Suspend scriptContext and remove it from the execution context stack.
+    // 14. Suspend scriptContext and remove it from the execution context stack.
     vm.pop_execution_context();
 
-    // 16. Assert: The execution context stack is not empty.
+    // 15. Assert: The execution context stack is not empty.
     VERIFY(!vm.execution_context_stack().is_empty());
 
-    // FIXME: 17. Resume the context that is now on the top of the execution context stack as the running execution context.
+    // FIXME: 16. Resume the context that is now on the top of the execution context stack as the running execution context.
 
-    // At this point we may have already run any queued promise jobs via on_call_stack_emptied,
-    // in which case this is a no-op.
     // FIXME: These three should be moved out of Interpreter::run and give the host an option to run these, as it's up to the host when these get run.
     //        https://tc39.es/ecma262/#sec-jobs for jobs and https://tc39.es/ecma262/#_ref_3508 for ClearKeptObjects
     //        finish_execution_generation is particularly an issue for LibWeb, as the HTML spec wants to run it specifically after performing a microtask checkpoint.
@@ -280,7 +278,7 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
 
     vm.finish_execution_generation();
 
-    // 18. Return ? result.
+    // 17. Return ? result.
     if (result.is_abrupt()) {
         VERIFY(result.type() == Completion::Type::Throw);
         return result.release_error();
@@ -759,10 +757,7 @@ Interpreter::ResultAndReturnRegister Interpreter::run_executable(Executable& exe
         return_value = reg(Register::saved_return_value());
     auto exception = reg(Register::exception());
 
-    // At this point we may have already run any queued promise jobs via on_call_stack_emptied,
-    // in which case this is a no-op.
     vm().run_queued_promise_jobs();
-
     vm().finish_execution_generation();
 
     if (!exception.is_empty())
@@ -1458,13 +1453,13 @@ inline Value new_regexp(VM& vm, ParsedRegex const& parsed_regex, ByteString cons
 }
 
 // 13.3.8.1 https://tc39.es/ecma262/#sec-runtime-semantics-argumentlistevaluation
-inline GC::MarkedVector<Value> argument_list_evaluation(VM& vm, Value arguments)
+inline GC::RootVector<Value> argument_list_evaluation(VM& vm, Value arguments)
 {
     // Note: Any spreading and actual evaluation is handled in preceding opcodes
     // Note: The spec uses the concept of a list, while we create a temporary array
     //       in the preceding opcodes, so we have to convert in a manner that is not
     //       visible to the user
-    GC::MarkedVector<Value> argument_values { vm.heap() };
+    GC::RootVector<Value> argument_values { vm.heap() };
 
     auto& argument_array = arguments.as_array();
     auto array_length = argument_array.indexed_properties().array_like_size();
@@ -1541,7 +1536,7 @@ inline ThrowCompletionOr<GC::Ref<Object>> super_call_with_argument_array(VM& vm,
     auto* func = get_super_constructor(vm);
 
     // 4. Let argList be ? ArgumentListEvaluation of Arguments.
-    GC::MarkedVector<Value> arg_list { vm.heap() };
+    GC::RootVector<Value> arg_list { vm.heap() };
     if (is_synthetic) {
         VERIFY(argument_array.is_object() && is<Array>(argument_array.as_object()));
         auto const& array_value = static_cast<Array const&>(argument_array.as_object());

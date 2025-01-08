@@ -72,7 +72,7 @@ struct CustomElementUpgradeReaction {
 // A callback reaction, which will call a lifecycle callback, and contains a callback function as well as a list of arguments.
 struct CustomElementCallbackReaction {
     GC::Root<WebIDL::CallbackType> callback;
-    GC::MarkedVector<JS::Value> arguments;
+    GC::RootVector<JS::Value> arguments;
 };
 
 // https://dom.spec.whatwg.org/#concept-element-custom-element-state
@@ -83,6 +83,17 @@ enum class CustomElementState {
     Uncustomized,
     Precustomized,
     Custom,
+};
+
+// https://drafts.csswg.org/css-contain/#proximity-to-the-viewport
+// An element that has content-visibility: auto is in one of three states when it comes to its proximity to the viewport:
+enum class ProximityToTheViewport {
+    // - The element is close to the viewport:
+    CloseToTheViewport,
+    // - The element is far away from the viewport:
+    FarAwayFromTheViewport,
+    // - The element’s proximity to the viewport is not determined:
+    NotDetermined,
 };
 
 class Element
@@ -250,6 +261,8 @@ public:
 
     static GC::Ptr<Layout::NodeWithStyle> create_layout_node_for_display_type(DOM::Document&, CSS::Display const&, GC::Ref<CSS::ComputedProperties>, Element*);
 
+    bool affected_by_hover() const;
+
     void set_pseudo_element_node(Badge<Layout::TreeBuilder>, CSS::Selector::PseudoElement::Type, GC::Ptr<Layout::NodeWithStyle>);
     GC::Ptr<Layout::NodeWithStyle> get_pseudo_element_node(CSS::Selector::PseudoElement::Type) const;
     bool has_pseudo_elements() const;
@@ -295,6 +308,9 @@ public:
     ENUMERATE_ARIA_ATTRIBUTES
 #undef __ENUMERATE_ARIA_ATTRIBUTE
 
+    GC::Ptr<DOM::Element> aria_active_descendant_element() { return m_aria_active_descendant_element; }
+    void set_aria_active_descendant_element(GC::Ptr<DOM::Element> value) { m_aria_active_descendant_element = value; }
+
     virtual bool exclude_from_accessibility_tree() const override;
 
     virtual bool include_in_accessibility_tree() const override;
@@ -306,7 +322,7 @@ public:
     bool has_referenced_and_hidden_ancestor() const;
 
     void enqueue_a_custom_element_upgrade_reaction(HTML::CustomElementDefinition& custom_element_definition);
-    void enqueue_a_custom_element_callback_reaction(FlyString const& callback_name, GC::MarkedVector<JS::Value> arguments);
+    void enqueue_a_custom_element_callback_reaction(FlyString const& callback_name, GC::RootVector<JS::Value> arguments);
 
     using CustomElementReactionQueue = Vector<Variant<CustomElementUpgradeReaction, CustomElementCallbackReaction>>;
     CustomElementReactionQueue* custom_element_reaction_queue() { return m_custom_element_reaction_queue; }
@@ -373,6 +389,10 @@ public:
     CSS::CountersSet& ensure_counters_set();
     void resolve_counters(CSS::ComputedProperties&);
     void inherit_counters();
+
+    ProximityToTheViewport proximity_to_the_viewport() const { return m_proximity_to_the_viewport; }
+    void determine_proximity_to_the_viewport();
+    bool is_relevant_to_the_user();
 
 protected:
     Element(Document&, DOM::QualifiedName);
@@ -464,6 +484,11 @@ private:
     bool m_in_top_layer { false };
 
     OwnPtr<CSS::CountersSet> m_counters_set;
+
+    GC::Ptr<DOM::Element> m_aria_active_descendant_element;
+
+    // https://drafts.csswg.org/css-contain/#proximity-to-the-viewport
+    ProximityToTheViewport m_proximity_to_the_viewport { ProximityToTheViewport::NotDetermined };
 };
 
 template<>

@@ -74,6 +74,7 @@ public:
     Optional<LengthPercentage> length_percentage(CSS::PropertyID) const;
     LengthBox length_box(CSS::PropertyID left_id, CSS::PropertyID top_id, CSS::PropertyID right_id, CSS::PropertyID bottom_id, const CSS::Length& default_value) const;
     Color color_or_fallback(CSS::PropertyID, Layout::NodeWithStyle const&, Color fallback) const;
+    CSS::PreferredColorScheme color_scheme(CSS::PreferredColorScheme, Optional<Vector<String> const&> document_supported_schemes) const;
     Optional<CSS::TextAnchor> text_anchor() const;
     Optional<CSS::TextAlign> text_align() const;
     Optional<CSS::TextJustify> text_justify() const;
@@ -158,6 +159,7 @@ public:
     Optional<CSS::Direction> direction() const;
     Optional<CSS::UnicodeBidi> unicode_bidi() const;
     Optional<CSS::WritingMode> writing_mode() const;
+    Optional<CSS::UserSelect> user_select() const;
 
     static Vector<CSS::Transformation> transformations_for_style_value(CSSStyleValue const& value);
     Vector<CSS::Transformation> transformations() const;
@@ -209,9 +211,12 @@ public:
 
     Optional<CSS::ScrollbarWidth> scrollbar_width() const;
 
-    static NonnullRefPtr<Gfx::Font const> font_fallback(bool monospace, bool bold);
+    static NonnullRefPtr<Gfx::Font const> font_fallback(bool monospace, bool bold, float point_size);
 
     static float resolve_opacity_value(CSSStyleValue const& value);
+
+    bool did_match_any_hover_rules() const { return m_did_match_any_hover_rules; }
+    void set_did_match_any_hover_rules() { m_did_match_any_hover_rules = true; }
 
 private:
     friend class StyleComputer;
@@ -236,6 +241,8 @@ private:
     mutable RefPtr<Gfx::FontCascadeList> m_font_list;
 
     Optional<CSSPixels> m_line_height;
+
+    bool m_did_match_any_hover_rules { false };
 };
 
 }

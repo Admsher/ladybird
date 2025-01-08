@@ -744,9 +744,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
         transform_stream->set_up(identity_transform_algorithm, flush_algorithm);
 
         // 4. Set internalResponse’s body’s stream to the result of internalResponse’s body’s stream piped through transformStream.
-        auto promise = internal_response->body()->stream()->piped_through(transform_stream->writable());
-        WebIDL::mark_promise_as_handled(*promise);
-        internal_response->body()->set_stream(transform_stream->readable());
+        internal_response->body()->set_stream(internal_response->body()->stream()->piped_through(transform_stream));
     }
 
     // 8. If fetchParams’s process response consume body is non-null, then:
@@ -1351,7 +1349,7 @@ WebIDL::ExceptionOr<GC::Ptr<PendingResponse>> http_redirect_fetch(JS::Realm& rea
 class CachePartition : public RefCounted<CachePartition> {
 public:
     // https://httpwg.org/specs/rfc9111.html#constructing.responses.from.caches
-    GC::Ptr<Infrastructure::Response> select_response(URL::URL const& url, ReadonlyBytes method, Vector<Infrastructure::Header> const& headers, Vector<GC::Ptr<Infrastructure::Response>>& initial_set_of_stored_responses) const
+    GC::Ptr<Infrastructure::Response> select_response(JS::Realm& realm, URL::URL const& url, ReadonlyBytes method, Vector<Infrastructure::Header> const& headers, Vector<GC::Ptr<Infrastructure::Response>>& initial_set_of_stored_responses) const
     {
         // When presented with a request, a cache MUST NOT reuse a stored response unless:
 
@@ -1374,7 +1372,7 @@ public:
 
         // FIXME: - the stored response does not contain the no-cache directive (Section 5.2.2.4), unless it is successfully validated (Section 4.3), and
 
-        initial_set_of_stored_responses.append(cached_response);
+        initial_set_of_stored_responses.append(*cached_response);
 
         // FIXME: - the stored response is one of the following:
         //          + fresh (see Section 4.2), or
@@ -1383,7 +1381,7 @@ public:
 
         dbgln("\033[32;1mHTTP CACHE HIT!\033[0m {}", url);
 
-        return cached_response;
+        return cached_response->clone(realm);
     }
 
     void store_response(JS::Realm& realm, Infrastructure::Request const& http_request, Infrastructure::Response const& response)
@@ -1584,7 +1582,7 @@ private:
         return true;
     }
 
-    HashMap<URL::URL, GC::Ptr<Infrastructure::Response>> m_cache;
+    HashMap<URL::URL, GC::Root<Infrastructure::Response>> m_cache;
 };
 
 class HTTPCache {
@@ -1645,7 +1643,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
 
     // 5. Let storedResponse be null.
     GC::Ptr<Infrastructure::Response> stored_response;
-    Vector<GC::Ptr<Infrastructure::Response>> initial_set_of_stored_responses;
+    GC::RootVector<GC::Ptr<Infrastructure::Response>> initial_set_of_stored_responses(realm.heap());
 
     // 6. Let httpCache be null.
     // (Typeless until we actually implement it, needed for checks below)
@@ -1939,7 +1937,7 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
             //    validation, as per the "Constructing Responses from Caches" chapter of HTTP Caching [HTTP-CACHING],
             //    if any.
             // NOTE: As mandated by HTTP, this still takes the `Vary` header into account.
-            stored_response = http_cache->select_response(http_request->current_url(), http_request->method(), *http_request->header_list(), initial_set_of_stored_responses);
+            stored_response = http_cache->select_response(realm, http_request->current_url(), http_request->method(), *http_request->header_list(), initial_set_of_stored_responses);
             // 2. If storedResponse is non-null, then:
             if (stored_response) {
                 // 1. If cache mode is "default", storedResponse is a stale-while-revalidate response,

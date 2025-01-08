@@ -67,6 +67,7 @@
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/RequestIdleCallback/IdleDeadline.h>
 #include <LibWeb/Selection/Selection.h>
+#include <LibWeb/StorageAPI/StorageBottle.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 
 namespace Web::HTML {
@@ -447,23 +448,55 @@ void Window::fire_a_page_transition_event(FlyString const& event_name, bool pers
 // https://html.spec.whatwg.org/multipage/webstorage.html#dom-localstorage
 WebIDL::ExceptionOr<GC::Ref<Storage>> Window::local_storage()
 {
-    // FIXME: Implement according to spec.
-    static HashMap<URL::Origin, GC::Root<Storage>> local_storage_per_origin;
-    auto storage = local_storage_per_origin.ensure(associated_document().origin(), [this]() -> GC::Root<Storage> {
-        return Storage::create(realm());
-    });
-    return GC::Ref { *storage };
+    auto& realm = this->realm();
+
+    // 1. If this's associated Document's local storage holder is non-null, then return this's associated Document's local storage holder.
+    auto& associated_document = this->associated_document();
+    if (auto storage = associated_document.local_storage_holder())
+        return GC::Ref { *storage };
+
+    // 2. Let map be the result of running obtain a local storage bottle map with this's relevant settings object and "localStorage".
+    auto map = StorageAPI::obtain_a_local_storage_bottle_map(relevant_settings_object(*this), "localStorage"sv);
+
+    // 3. If map is failure, then throw a "SecurityError" DOMException.
+    if (!map)
+        return WebIDL::SecurityError::create(realm, "localStorage is not available"_string);
+
+    // 4. Let storage be a new Storage object whose map is map.
+    auto storage = Storage::create(realm, Storage::Type::Session, map.release_nonnull());
+
+    // 5. Set this's associated Document's local storage holder to storage.
+    associated_document.set_local_storage_holder(storage);
+
+    // 6. Return storage.
+    return storage;
 }
 
 // https://html.spec.whatwg.org/multipage/webstorage.html#dom-sessionstorage
 WebIDL::ExceptionOr<GC::Ref<Storage>> Window::session_storage()
 {
-    // FIXME: Implement according to spec.
-    static HashMap<URL::Origin, GC::Root<Storage>> session_storage_per_origin;
-    auto storage = session_storage_per_origin.ensure(associated_document().origin(), [this]() -> GC::Root<Storage> {
-        return Storage::create(realm());
-    });
-    return GC::Ref { *storage };
+    auto& realm = this->realm();
+
+    // 1. If this's associated Document's session storage holder is non-null, then return this's associated Document's session storage holder.
+    auto& associated_document = this->associated_document();
+    if (auto storage = associated_document.session_storage_holder())
+        return GC::Ref { *storage };
+
+    // 2. Let map be the result of running obtain a session storage bottle map with this's relevant settings object and "sessionStorage".
+    auto map = StorageAPI::obtain_a_session_storage_bottle_map(relevant_settings_object(*this), "sessionStorage"sv);
+
+    // 3. If map is failure, then throw a "SecurityError" DOMException.
+    if (!map)
+        return WebIDL::SecurityError::create(realm, "sessionStorage is not available"_string);
+
+    // 4. Let storage be a new Storage object whose map is map.
+    auto storage = Storage::create(realm, Storage::Type::Session, map.release_nonnull());
+
+    // 5. Set this's associated Document's session storage holder to storage.
+    associated_document.set_session_storage_holder(storage);
+
+    // 6. Return storage.
+    return storage;
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#sticky-activation
@@ -526,7 +559,7 @@ void Window::consume_history_action_user_activation()
     auto navigables = top->active_document()->inclusive_descendant_navigables();
 
     // 4. Let windows be the list of Window objects constructed by taking the active window of each item in navigables.
-    GC::MarkedVector<GC::Ptr<Window>> windows(heap());
+    GC::RootVector<GC::Ptr<Window>> windows(heap());
     for (auto& n : navigables)
         windows.append(n->active_window());
 
@@ -551,7 +584,7 @@ void Window::consume_user_activation()
     auto navigables = top->active_document()->inclusive_descendant_navigables();
 
     // 4. Let windows be the list of Window objects constructed by taking the active window of each item in navigables.
-    GC::MarkedVector<GC::Ptr<Window>> windows(heap());
+    GC::RootVector<GC::Ptr<Window>> windows(heap());
     for (auto& n : navigables)
         windows.append(n->active_window());
 

@@ -12,6 +12,7 @@
 #include <LibWeb/CSS/Parser/ParsingContext.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
+#include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLMetaElement.h>
 #include <LibWeb/Infra/CharacterTypes.h>
@@ -47,42 +48,32 @@ Optional<HTMLMetaElement::HttpEquivAttributeState> HTMLMetaElement::http_equiv_s
     return OptionalNone {};
 }
 
+void HTMLMetaElement::update_metadata(Optional<String> const& old_name)
+{
+    if (name().has_value()) {
+        if (name()->equals_ignoring_ascii_case("theme-color"sv)) {
+            document().obtain_theme_color();
+        } else if (name()->equals_ignoring_ascii_case("color-scheme"sv)) {
+            document().obtain_supported_color_schemes();
+            return;
+        }
+    }
+
+    if (old_name.has_value()) {
+        if (old_name->equals_ignoring_ascii_case("theme-color"sv)) {
+            document().obtain_theme_color();
+        } else if (old_name->equals_ignoring_ascii_case("color-scheme"sv)) {
+            document().obtain_supported_color_schemes();
+            return;
+        }
+    }
+}
+
 void HTMLMetaElement::inserted()
 {
     Base::inserted();
 
-    // https://html.spec.whatwg.org/multipage/semantics.html#meta-theme-color
-    // 1. To obtain a page's theme color, user agents must run the following steps:
-    //     * The element is in a document tree
-    //     * The element has a name attribute, whose value is an ASCII case-insensitive match for theme-color
-    //     * The element has a content attribute
-    auto content = attribute(AttributeNames::content);
-    if (name().has_value() && name()->equals_ignoring_ascii_case("theme-color"sv) && content.has_value()) {
-        auto context = CSS::Parser::ParsingContext { document() };
-
-        // 2. For each element in candidate elements:
-
-        // 1. If element has a media attribute and the value of element's media attribute does not match the environment, then continue.
-        auto media = attribute(AttributeNames::media);
-        if (media.has_value()) {
-            auto query = parse_media_query(context, media.value());
-            if (document().window() && !query->evaluate(*document().window()))
-                return;
-        }
-
-        // 2. Let value be the result of stripping leading and trailing ASCII whitespace from the value of element's content attribute.
-        auto value = content->bytes_as_string_view().trim(Infra::ASCII_WHITESPACE);
-
-        // 3. Let color be the result of parsing value.
-        auto css_value = parse_css_value(context, value, CSS::PropertyID::Color);
-        if (css_value.is_null() || !css_value->is_color())
-            return;
-        auto color = css_value->to_color({}); // TODO: Pass a layout node?
-
-        // 4. If color is not failure, then return color.
-        document().page().client().page_did_change_theme_color(color);
-        return;
-    }
+    update_metadata();
 
     // https://html.spec.whatwg.org/multipage/semantics.html#pragma-directives
     // When a meta element is inserted into the document, if its http-equiv attribute is present and represents one of
@@ -157,6 +148,22 @@ void HTMLMetaElement::inserted()
             dbgln("FIXME: Implement '{}' http-equiv state", get_attribute_value(AttributeNames::http_equiv));
             break;
         }
+    }
+}
+
+void HTMLMetaElement::removed_from(Node* parent)
+{
+    Base::removed_from(parent);
+    update_metadata();
+}
+
+void HTMLMetaElement::attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_)
+{
+    Base::attribute_changed(local_name, old_value, value, namespace_);
+    if (local_name == HTML::AttributeNames::name) {
+        update_metadata(old_value);
+    } else {
+        update_metadata();
     }
 }
 

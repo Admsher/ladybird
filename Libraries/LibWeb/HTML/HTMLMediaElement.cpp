@@ -1042,7 +1042,7 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::fetch_resource(URL::URL const& url_r
             // 5. Otherwise, incrementally read response's body given updateMedia, processEndOfMedia, an empty algorithm, and global.
 
             VERIFY(response->body());
-            auto empty_algorithm = GC::create_function(heap(), [](JS::Value) {});
+            auto empty_algorithm = GC::create_function(heap(), [](JS::Value) { });
 
             // FIXME: We are "fully" reading the response here, rather than "incrementally". Memory concerns aside, this should be okay for now as we are
             //        always setting byteRange to "entire resource". However, we should switch to incremental reads when that is implemented, and then
@@ -1863,12 +1863,12 @@ void HTMLMediaElement::time_marches_on(TimeMarchesOnReason reason)
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#take-pending-play-promises
-GC::MarkedVector<GC::Ref<WebIDL::Promise>> HTMLMediaElement::take_pending_play_promises()
+GC::RootVector<GC::Ref<WebIDL::Promise>> HTMLMediaElement::take_pending_play_promises()
 {
     // 1. Let promises be an empty list of promises.
     // 2. Copy the media element's list of pending play promises to promises.
     // 3. Clear the media element's list of pending play promises.
-    GC::MarkedVector<GC::Ref<WebIDL::Promise>> promises(heap());
+    GC::RootVector<GC::Ref<WebIDL::Promise>> promises(heap());
     promises.extend(move(m_pending_play_promises));
 
     // 4. Return promises.

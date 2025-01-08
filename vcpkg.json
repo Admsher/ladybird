@@ -129,7 +129,7 @@
     },
     {
       "name": "curl",
-      "version": "8.10.1#0"
+      "version": "8.11.1#0"
     },
     {
       "name": "dirent",
@@ -137,7 +137,7 @@
     },
     {
       "name": "ffmpeg",
-      "version": "6.1.1#11"
+      "version": "7.1#1"
     },
     {
       "name": "fontconfig",
@@ -149,7 +149,7 @@
     },
     {
       "name": "libjpeg-turbo",
-      "version": "3.0.2"
+      "version": "3.1.0#0"
     },
     {
       "name": "libjxl",
@@ -189,7 +189,7 @@
     },
     {
       "name": "sqlite3",
-      "version": "3.46.1"
+      "version": "3.47.2#0"
     },
     {
       "name": "woff2",

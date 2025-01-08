@@ -154,7 +154,7 @@ Optional<CSSNumericType> CSSNumericType::added_to(CSSNumericType const& other) c
     }
     //    If type1 and/or type2 contain "percent" with a non-zero value,
     //    and type1 and/or type2 contain a key other than "percent" with a non-zero value
-    if ((type1.exponent(BaseType::Percent) != 0 || type2.exponent(BaseType::Percent) != 0)
+    if (((type1.exponent(BaseType::Percent).has_value() && type1.exponent(BaseType::Percent) != 0) || (type2.exponent(BaseType::Percent).has_value() && type2.exponent(BaseType::Percent) != 0))
         && (type1.contains_a_key_other_than_percent_with_a_non_zero_value() || type2.contains_a_key_other_than_percent_with_a_non_zero_value())) {
         // For each base type other than "percent" hint:
         for (auto hint_int = 0; hint_int < to_underlying(BaseType::__Count); ++hint_int) {
@@ -444,14 +444,6 @@ bool CSSNumericType::matches_number() const
     }
 
     return true;
-}
-
-// https://drafts.css-houdini.org/css-typed-om-1/#cssnumericvalue-match
-bool CSSNumericType::matches_number_percentage() const
-{
-    // FIXME: This is incorrect. <number-percentage> is not a legal type. Instead we should check separately if this
-    //        matches a number, or if it matches a percentage.
-    return matches_number() || matches_percentage();
 }
 
 bool CSSNumericType::matches_dimension() const

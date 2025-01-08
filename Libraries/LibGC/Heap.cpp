@@ -187,8 +187,8 @@ public:
                 case HeapRoot::Type::Root:
                     node.set("root"sv, ByteString::formatted("Root {} {}:{}", location->function_name(), location->filename(), location->line_number()));
                     break;
-                case HeapRoot::Type::MarkedVector:
-                    node.set("root"sv, "MarkedVector");
+                case HeapRoot::Type::RootVector:
+                    node.set("root"sv, "RootVector");
                     break;
                 case HeapRoot::Type::RegisterPointer:
                     node.set("root"sv, "RegisterPointer");
@@ -267,7 +267,7 @@ void Heap::gather_roots(HashMap<Cell*, HeapRoot>& roots)
     for (auto& root : m_roots)
         roots.set(root.cell(), HeapRoot { .type = HeapRoot::Type::Root, .location = &root.source_location() });
 
-    for (auto& vector : m_marked_vectors)
+    for (auto& vector : m_root_vectors)
         vector.gather_roots(roots);
 
     if constexpr (HEAP_DEBUG) {

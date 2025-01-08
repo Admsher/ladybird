@@ -22,6 +22,7 @@
 #include <LibWeb/CSS/StyleValues/URLStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Dump.h>
+#include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/FormattingContext.h>
@@ -328,7 +329,15 @@ void NodeWithStyle::apply_style(const CSS::ComputedProperties& computed_style)
 {
     auto& computed_values = mutable_computed_values();
 
-    // NOTE: color must be set first to ensure currentColor can be resolved in other properties (e.g. background-color).
+    // NOTE: color-scheme must be set first to ensure system colors can be resolved correctly.
+    auto preferred_color_scheme = document().page().preferred_color_scheme();
+    // FIXME: We can't just check for Auto because page().preferred_color_scheme() returns garbage data after startup.
+    if (preferred_color_scheme != CSS::PreferredColorScheme::Dark && preferred_color_scheme != CSS::PreferredColorScheme::Light) {
+        preferred_color_scheme = document().page().palette().is_dark() ? CSS::PreferredColorScheme::Dark : CSS::PreferredColorScheme::Light;
+    }
+    computed_values.set_color_scheme(computed_style.color_scheme(preferred_color_scheme, document().supported_color_schemes()));
+
+    // NOTE: color must be set second to ensure currentColor can be resolved in other properties (e.g. background-color).
     computed_values.set_color(computed_style.color_or_fallback(CSS::PropertyID::Color, *this, CSS::InitialValues::color()));
 
     // NOTE: We have to be careful that font-related properties get set in the right order.
@@ -996,6 +1005,9 @@ void NodeWithStyle::apply_style(const CSS::ComputedProperties& computed_style)
     if (auto writing_mode = computed_style.writing_mode(); writing_mode.has_value())
         computed_values.set_writing_mode(writing_mode.value());
 
+    if (auto user_select = computed_style.user_select(); user_select.has_value())
+        computed_values.set_user_select(user_select.value());
+
     propagate_style_to_anonymous_wrappers();
 }
 
@@ -1204,6 +1216,55 @@ DOM::Document& Node::document()
 DOM::Document const& Node::document() const
 {
     return m_dom_node->document();
+}
+
+// https://drafts.csswg.org/css-ui/#propdef-user-select
+CSS::UserSelect Node::user_select_used_value() const
+{
+    // The used value is the same as the computed value, except:
+    auto computed_value = computed_values().user_select();
+
+    // 1. on editable elements where the used value is always 'contain' regardless of the computed value
+
+    // 2. when the computed value is 'auto', in which case the used value is one of the other values as defined below
+
+    // For the purpose of this specification, an editable element is either an editing host or a mutable form control with
+    // textual content, such as textarea.
+    auto* form_control = dynamic_cast<HTML::FormAssociatedTextControlElement const*>(dom_node());
+    // FIXME: Check if this needs to exclude input elements with types such as color or range, and if so, which ones exactly.
+    if ((dom_node() && dom_node()->is_editing_host()) || (form_control && form_control->is_mutable())) {
+        return CSS::UserSelect::Contain;
+    } else if (computed_value == CSS::UserSelect::Auto) {
+        // The used value of 'auto' is determined as follows:
+        // - On the '::before' and '::after' pseudo-elements, the used value is 'none'
+        if (is_generated_for_before_pseudo_element() || is_generated_for_after_pseudo_element()) {
+            return CSS::UserSelect::None;
+        }
+
+        // - If the element is an editable element, the used value is 'contain'
+        // NOTE: We already handled this above.
+
+        auto parent_element = parent();
+        if (parent_element) {
+            auto parent_used_value = parent_element->user_select_used_value();
+
+            // - Otherwise, if the used value of user-select on the parent of this element is 'all', the used value is 'all'
+            if (parent_used_value == CSS::UserSelect::All) {
+                return CSS::UserSelect::All;
+            }
+
+            // - Otherwise, if the used value of user-select on the parent of this element is 'none', the used value is
+            //   'none'
+            if (parent_used_value == CSS::UserSelect::None) {
+                return CSS::UserSelect::None;
+            }
+        }
+
+        // - Otherwise, the used value is 'text'
+        return CSS::UserSelect::Text;
+    }
+
+    return computed_value;
 }
 
 }

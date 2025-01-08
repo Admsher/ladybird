@@ -449,7 +449,7 @@ private:
         }
     }
 
-    [[nodiscard]] ThrowCompletionOr<Value> invoke_internal(VM&, PropertyKey const&, Optional<GC::MarkedVector<Value>> arguments);
+    [[nodiscard]] ThrowCompletionOr<Value> invoke_internal(VM&, PropertyKey const&, Optional<GC::RootVector<Value>> arguments);
 
     ThrowCompletionOr<i32> to_i32_slow_case(VM&) const;
 
@@ -591,18 +591,6 @@ public:
             m_value = other.m_value;
         }
         return *this;
-    }
-
-    template<typename O>
-    ALWAYS_INLINE bool operator==(Optional<O> const& other) const
-    {
-        return has_value() == other.has_value() && (!has_value() || value() == other.value());
-    }
-
-    template<typename O>
-    ALWAYS_INLINE bool operator==(O const& other) const
-    {
-        return has_value() && value() == other;
     }
 
     void clear()

@@ -57,6 +57,7 @@ CanvasGradient
 CanvasPattern
 CanvasRenderingContext2D
 ChannelMergerNode
+ChannelSplitterNode
 CharacterData
 Clipboard
 ClipboardEvent
@@ -66,6 +67,7 @@ CloseWatcher
 Comment
 CompositionEvent
 CompressionStream
+ConstantSourceNode
 CountQueuingStrategy
 Crypto
 CryptoKey
@@ -91,6 +93,7 @@ DataTransferItemList
 DataView
 Date
 DecompressionStream
+DelayNode
 DisposableStack
 Document
 DocumentFragment
@@ -381,6 +384,7 @@ ToggleEvent
 TrackEvent
 TransformStream
 TransformStreamDefaultController
+TransitionEvent
 TreeWalker
 TypeError
 UIEvent

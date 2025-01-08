@@ -126,6 +126,7 @@ set(SOURCES
     CSS/StyleValues/BasicShapeStyleValue.cpp
     CSS/StyleValues/BorderRadiusStyleValue.cpp
     CSS/StyleValues/CalculatedStyleValue.cpp
+    CSS/StyleValues/ColorSchemeStyleValue.cpp
     CSS/StyleValues/ConicGradientStyleValue.cpp
     CSS/StyleValues/ContentStyleValue.cpp
     CSS/StyleValues/CounterDefinitionsStyleValue.cpp
@@ -137,6 +138,7 @@ set(SOURCES
     CSS/StyleValues/CSSKeywordValue.cpp
     CSS/StyleValues/CSSLabLike.cpp
     CSS/StyleValues/CSSLCHLike.cpp
+    CSS/StyleValues/CSSLightDark.cpp
     CSS/StyleValues/CSSRGB.cpp
     CSS/StyleValues/DisplayStyleValue.cpp
     CSS/StyleValues/EasingStyleValue.cpp
@@ -170,6 +172,7 @@ set(SOURCES
     CSS/SystemColor.cpp
     CSS/Time.cpp
     CSS/Transformation.cpp
+    CSS/TransitionEvent.cpp
     CSS/VisualViewport.cpp
     Cookie/Cookie.cpp
     Cookie/ParsedCookie.cpp
@@ -689,8 +692,12 @@ set(SOURCES
     ServiceWorker/ServiceWorkerRegistration.cpp
     SRI/SRI.cpp
     StorageAPI/NavigatorStorage.cpp
+    StorageAPI/StorageBottle.cpp
+    StorageAPI/StorageEndpoint.cpp
     StorageAPI/StorageKey.cpp
     StorageAPI/StorageManager.cpp
+    StorageAPI/StorageShed.cpp
+    StorageAPI/StorageShelf.cpp
     Streams/AbstractOperations.cpp
     Streams/ByteLengthQueuingStrategy.cpp
     Streams/CountQueuingStrategy.cpp
@@ -788,6 +795,9 @@ set(SOURCES
     WebAudio/BaseAudioContext.cpp
     WebAudio/BiquadFilterNode.cpp
     WebAudio/ChannelMergerNode.cpp
+    WebAudio/ChannelSplitterNode.cpp
+    WebAudio/ConstantSourceNode.cpp
+    WebAudio/DelayNode.cpp
     WebAudio/DynamicsCompressorNode.cpp
     WebAudio/GainNode.cpp
     WebAudio/OfflineAudioContext.cpp

@@ -23,6 +23,7 @@ namespace Web::HTML::EventNames {
     __ENUMERATE_HTML_EVENT(animationiteration)       \
     __ENUMERATE_HTML_EVENT(animationstart)           \
     __ENUMERATE_HTML_EVENT(beforeinput)              \
+    __ENUMERATE_HTML_EVENT(beforematch)              \
     __ENUMERATE_HTML_EVENT(beforeprint)              \
     __ENUMERATE_HTML_EVENT(beforetoggle)             \
     __ENUMERATE_HTML_EVENT(beforeunload)             \
@@ -36,7 +37,9 @@ namespace Web::HTML::EventNames {
     __ENUMERATE_HTML_EVENT(close)                    \
     __ENUMERATE_HTML_EVENT(complete)                 \
     __ENUMERATE_HTML_EVENT(connect)                  \
+    __ENUMERATE_HTML_EVENT(contextlost)              \
     __ENUMERATE_HTML_EVENT(contextmenu)              \
+    __ENUMERATE_HTML_EVENT(contextrestored)          \
     __ENUMERATE_HTML_EVENT(controllerchange)         \
     __ENUMERATE_HTML_EVENT(copy)                     \
     __ENUMERATE_HTML_EVENT(cuechange)                \
@@ -116,6 +119,9 @@ namespace Web::HTML::EventNames {
     __ENUMERATE_HTML_EVENT(suspend)                  \
     __ENUMERATE_HTML_EVENT(timeupdate)               \
     __ENUMERATE_HTML_EVENT(toggle)                   \
+    __ENUMERATE_HTML_EVENT(transitioncancel)         \
+    __ENUMERATE_HTML_EVENT(transitionrun)            \
+    __ENUMERATE_HTML_EVENT(transitionstart)          \
     __ENUMERATE_HTML_EVENT(transitionend)            \
     __ENUMERATE_HTML_EVENT(unhandledrejection)       \
     __ENUMERATE_HTML_EVENT(unload)                   \

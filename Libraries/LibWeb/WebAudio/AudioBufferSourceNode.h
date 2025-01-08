@@ -14,7 +14,7 @@
 namespace Web::WebAudio {
 
 // https://webaudio.github.io/web-audio-api/#AudioBufferSourceOptions
-struct AudioBufferSourceOptions {
+struct AudioBufferSourceOptions : AudioNodeOptions {
     GC::Ptr<AudioBuffer> buffer;
     float detune { 0 };
     bool loop { false };
@@ -42,7 +42,7 @@ public:
     WebIDL::ExceptionOr<void> set_loop_end(double);
     double loop_end() const;
     WebIDL::UnsignedLong number_of_inputs() override { return 0; }
-    WebIDL::UnsignedLong number_of_outputs() override { return 2; }
+    WebIDL::UnsignedLong number_of_outputs() override { return 1; }
 
     WebIDL::ExceptionOr<void> start(Optional<double>, Optional<double>, Optional<double>);
 
@@ -60,6 +60,8 @@ private:
     GC::Ref<AudioParam> m_playback_rate;
     GC::Ref<AudioParam> m_detune;
     bool m_loop { false };
+    // https://webaudio.github.io/web-audio-api/#dom-audiobuffersourcenode-buffer-set-slot
+    bool m_buffer_set { false };
     double m_loop_start { 0.0 };
     double m_loop_end { 0.0 };
 };

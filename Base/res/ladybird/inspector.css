@@ -2,6 +2,12 @@
     --code-font-family: Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+@font-face {
+  font-family: 'FoxitSerifBoldItalic';
+  src: url('Base/res/fonts/FoxitSerifBoldItalic.pfb') format('pfb');
+}
+
+
 @media (prefers-color-scheme: dark) {
     :root {
         --background: rgb(23, 23, 23);

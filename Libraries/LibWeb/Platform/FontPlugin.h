@@ -21,6 +21,7 @@ enum class GenericFont {
     UiRounded,
     UiSansSerif,
     UiSerif,
+
     __Count,
 };
 

@@ -208,6 +208,7 @@ void FontPlugin::update_generic_fonts()
     update_mapping(Web::Platform::GenericFont::UiRounded, sans_serif_fallbacks);
     update_mapping(Web::Platform::GenericFont::UiSansSerif, sans_serif_fallbacks);
     update_mapping(Web::Platform::GenericFont::UiSerif, serif_fallbacks);
+    
 }
 
 FlyString FontPlugin::generic_font_name(Web::Platform::GenericFont generic_font)

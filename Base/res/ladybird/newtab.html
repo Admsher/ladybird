@@ -12,7 +12,7 @@
         }
     </style>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 </head>
   <body>
@@ -28,11 +28,12 @@
       </span>
     </div>
 
-    <canvas id="pdf-render"></canvas>
+    <canvas  id="pdf-render"></canvas>
     <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.7.570/build/pdf.min.js"></script>
     <script>
 
-    const url = 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
+      const url = 'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf';
+
     // const url = '/home/admsher/ladybird/Base/res/ladybird/160F-2019.pdf';
 let pdfDoc = null,
   pageNum = 1,
@@ -50,10 +51,11 @@ const renderPage = num => {
   // Get page
   pdfDoc.getPage(num).then(page => {
     // Set scale
-    const viewport = page.getViewport({ scale });
-    // terminal.log(viewport);
-    canvas.height = 200;
-    canvas.width = 100;
+    const viewport = page.getViewport({ scale : 1.5 });
+    // console.log(viewport);
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+    // console.log(canvas);
 
     const renderCtx = {
       canvasContext: ctx,

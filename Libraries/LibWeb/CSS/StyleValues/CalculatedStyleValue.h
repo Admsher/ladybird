@@ -24,6 +24,11 @@ namespace Web::CSS {
 
 class CalculationNode;
 
+// https://drafts.csswg.org/css-values-4/#ref-for-calc-calculation%E2%91%A2%E2%91%A7
+struct CalculationContext {
+    Optional<ValueType> percentages_resolve_as {};
+};
+
 class CalculatedStyleValue : public CSSStyleValue {
 public:
     using PercentageBasis = Variant<Empty, Angle, Flex, Frequency, Length, Time>;
@@ -56,31 +61,31 @@ public:
         Optional<CSSNumericType> m_type;
     };
 
-    static ValueComparingNonnullRefPtr<CalculatedStyleValue> create(NonnullOwnPtr<CalculationNode> calculation, CSSNumericType resolved_type)
+    static ValueComparingNonnullRefPtr<CalculatedStyleValue> create(NonnullOwnPtr<CalculationNode> calculation, CSSNumericType resolved_type, CalculationContext context)
     {
-        return adopt_ref(*new (nothrow) CalculatedStyleValue(move(calculation), resolved_type));
+        return adopt_ref(*new (nothrow) CalculatedStyleValue(move(calculation), move(resolved_type), move(context)));
     }
 
     virtual String to_string(SerializationMode) const override;
     virtual bool equals(CSSStyleValue const& other) const override;
 
-    bool resolves_to_angle() const { return m_resolved_type.matches_angle(); }
-    bool resolves_to_angle_percentage() const { return m_resolved_type.matches_angle_percentage(); }
+    bool resolves_to_angle() const { return m_resolved_type.matches_angle(m_context.percentages_resolve_as); }
+    bool resolves_to_angle_percentage() const { return m_resolved_type.matches_angle_percentage(m_context.percentages_resolve_as); }
     Optional<Angle> resolve_angle() const;
     Optional<Angle> resolve_angle(Layout::Node const& layout_node) const;
     Optional<Angle> resolve_angle(Length::ResolutionContext const& context) const;
     Optional<Angle> resolve_angle_percentage(Angle const& percentage_basis) const;
 
-    bool resolves_to_flex() const { return m_resolved_type.matches_flex(); }
+    bool resolves_to_flex() const { return m_resolved_type.matches_flex(m_context.percentages_resolve_as); }
     Optional<Flex> resolve_flex() const;
 
-    bool resolves_to_frequency() const { return m_resolved_type.matches_frequency(); }
-    bool resolves_to_frequency_percentage() const { return m_resolved_type.matches_frequency_percentage(); }
+    bool resolves_to_frequency() const { return m_resolved_type.matches_frequency(m_context.percentages_resolve_as); }
+    bool resolves_to_frequency_percentage() const { return m_resolved_type.matches_frequency_percentage(m_context.percentages_resolve_as); }
     Optional<Frequency> resolve_frequency() const;
     Optional<Frequency> resolve_frequency_percentage(Frequency const& percentage_basis) const;
 
-    bool resolves_to_length() const { return m_resolved_type.matches_length(); }
-    bool resolves_to_length_percentage() const { return m_resolved_type.matches_length_percentage(); }
+    bool resolves_to_length() const { return m_resolved_type.matches_length(m_context.percentages_resolve_as); }
+    bool resolves_to_length_percentage() const { return m_resolved_type.matches_length_percentage(m_context.percentages_resolve_as); }
     Optional<Length> resolve_length(Length::ResolutionContext const&) const;
     Optional<Length> resolve_length(Layout::Node const& layout_node) const;
     Optional<Length> resolve_length_percentage(Layout::Node const&, Length const& percentage_basis) const;
@@ -90,15 +95,15 @@ public:
     bool resolves_to_percentage() const { return m_resolved_type.matches_percentage(); }
     Optional<Percentage> resolve_percentage() const;
 
-    bool resolves_to_resolution() const { return m_resolved_type.matches_resolution(); }
+    bool resolves_to_resolution() const { return m_resolved_type.matches_resolution(m_context.percentages_resolve_as); }
     Optional<Resolution> resolve_resolution() const;
 
-    bool resolves_to_time() const { return m_resolved_type.matches_time(); }
-    bool resolves_to_time_percentage() const { return m_resolved_type.matches_time_percentage(); }
+    bool resolves_to_time() const { return m_resolved_type.matches_time(m_context.percentages_resolve_as); }
+    bool resolves_to_time_percentage() const { return m_resolved_type.matches_time_percentage(m_context.percentages_resolve_as); }
     Optional<Time> resolve_time() const;
     Optional<Time> resolve_time_percentage(Time const& percentage_basis) const;
 
-    bool resolves_to_number() const { return m_resolved_type.matches_number(); }
+    bool resolves_to_number() const { return m_resolved_type.matches_number(m_context.percentages_resolve_as); }
     Optional<double> resolve_number() const;
     Optional<double> resolve_number(Length::ResolutionContext const&) const;
     Optional<double> resolve_number(Layout::Node const& layout_node) const;
@@ -113,15 +118,19 @@ public:
     String dump() const;
 
 private:
-    explicit CalculatedStyleValue(NonnullOwnPtr<CalculationNode> calculation, CSSNumericType resolved_type)
+    explicit CalculatedStyleValue(NonnullOwnPtr<CalculationNode> calculation, CSSNumericType resolved_type, CalculationContext context)
         : CSSStyleValue(Type::Calculated)
-        , m_resolved_type(resolved_type)
+        , m_resolved_type(move(resolved_type))
         , m_calculation(move(calculation))
+        , m_context(move(context))
     {
     }
 
+    Optional<ValueType> percentage_resolved_type() const;
+
     CSSNumericType m_resolved_type;
     NonnullOwnPtr<CalculationNode> m_calculation;
+    CalculationContext m_context;
 };
 
 // https://www.w3.org/TR/css-values-4/#calculation-tree
@@ -258,7 +267,7 @@ private:
 
 class NumericCalculationNode final : public CalculationNode {
 public:
-    static NonnullOwnPtr<NumericCalculationNode> create(NumericValue, Optional<ValueType> percentage_resolved_type = {});
+    static NonnullOwnPtr<NumericCalculationNode> create(NumericValue, CalculationContext const&);
     ~NumericCalculationNode();
 
     virtual String to_string() const override;

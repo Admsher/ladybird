@@ -88,11 +88,7 @@ public:
     Optional<String> placeholder_value() const;
 
     bool checked() const { return m_checked; }
-    enum class ChangeSource {
-        Programmatic,
-        User,
-    };
-    void set_checked(bool, ChangeSource = ChangeSource::Programmatic);
+    void set_checked(bool);
 
     bool checked_binding() const { return checked(); }
     void set_checked_binding(bool);
@@ -187,7 +183,7 @@ public:
     virtual void form_associated_element_was_removed(DOM::Node*) override;
     virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<FlyString> const&) override;
 
-    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) override;
+    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) const override;
 
     GC::Ref<ValidityState const> validity() const;
 

@@ -11,6 +11,7 @@
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Window.h>
+#include <LibWeb/WebAudio/AnalyserNode.h>
 #include <LibWeb/WebAudio/AudioBuffer.h>
 #include <LibWeb/WebAudio/AudioBufferSourceNode.h>
 #include <LibWeb/WebAudio/AudioDestinationNode.h>
@@ -29,7 +30,7 @@ namespace Web::WebAudio {
 BaseAudioContext::BaseAudioContext(JS::Realm& realm, float sample_rate)
     : DOM::EventTarget(realm)
     , m_sample_rate(sample_rate)
-    , m_listener(AudioListener::create(realm))
+    , m_listener(AudioListener::create(realm, *this))
 {
 }
 
@@ -57,6 +58,12 @@ void BaseAudioContext::set_onstatechange(WebIDL::CallbackType* event_handler)
 WebIDL::CallbackType* BaseAudioContext::onstatechange()
 {
     return event_handler_attribute(HTML::EventNames::statechange);
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createanalyser
+WebIDL::ExceptionOr<GC::Ref<AnalyserNode>> BaseAudioContext::create_analyser()
+{
+    return AnalyserNode::create(realm(), *this);
 }
 
 // https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createbiquadfilter
@@ -153,6 +160,14 @@ WebIDL::ExceptionOr<GC::Ref<PeriodicWave>> BaseAudioContext::create_periodic_wav
     return PeriodicWave::construct_impl(realm(), *this, options);
 }
 
+WebIDL::ExceptionOr<void> BaseAudioContext::verify_audio_options_inside_nominal_range(JS::Realm& realm, float sample_rate)
+{
+    if (sample_rate < MIN_SAMPLE_RATE || sample_rate > MAX_SAMPLE_RATE)
+        return WebIDL::NotSupportedError::create(realm, "Sample rate is outside of allowed range"_string);
+
+    return {};
+}
+
 // https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createbuffer
 WebIDL::ExceptionOr<void> BaseAudioContext::verify_audio_options_inside_nominal_range(JS::Realm& realm, WebIDL::UnsignedLong number_of_channels, WebIDL::UnsignedLong length, float sample_rate)
 {
@@ -167,8 +182,7 @@ WebIDL::ExceptionOr<void> BaseAudioContext::verify_audio_options_inside_nominal_
     if (length == 0)
         return WebIDL::NotSupportedError::create(realm, "Length of buffer must be at least 1"_string);
 
-    if (sample_rate < MIN_SAMPLE_RATE || sample_rate > MAX_SAMPLE_RATE)
-        return WebIDL::NotSupportedError::create(realm, "Sample rate is outside of allowed range"_string);
+    TRY(verify_audio_options_inside_nominal_range(realm, sample_rate));
 
     return {};
 }

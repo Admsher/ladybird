@@ -2,7 +2,7 @@
  * Copyright (c) 2020, the SerenityOS developers.
  * Copyright (c) 2022, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2022-2023, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2024-2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -578,10 +578,11 @@ String Range::to_string() const
     }
 
     // 4. Append the concatenation of the data of all Text nodes that are contained in this, in tree order, to s.
-    for (GC::Ptr<Node> node = start_container(); node != end_container()->next_sibling(); node = node->next_in_pre_order()) {
-        if (is<Text>(*node) && contains_node(*node))
+    for_each_contained([&](GC::Ref<DOM::Node> node) {
+        if (is<Text>(*node))
             builder.append(static_cast<Text const&>(*node).data());
-    }
+        return IterationDecision::Continue;
+    });
 
     // 5. If this’s end node is a Text node, then append the substring of that node’s data from its start until this’s end offset to s.
     if (is<Text>(*end_container())) {
@@ -807,12 +808,9 @@ bool Range::contains_node(GC::Ref<Node> node) const
 // https://dom.spec.whatwg.org/#partially-contained
 bool Range::partially_contains_node(GC::Ref<Node> node) const
 {
-    // A node is partially contained in a live range if it’s an inclusive ancestor of the live range’s start node but not its end node, or vice versa.
-    if (node->is_inclusive_ancestor_of(m_start_container) && node != m_end_container)
-        return true;
-    if (node->is_inclusive_ancestor_of(m_end_container) && node != m_start_container)
-        return true;
-    return false;
+    // A node is partially contained in a live range if it’s an inclusive ancestor of the live range’s start node but
+    // not its end node, or vice versa.
+    return node->is_inclusive_ancestor_of(m_start_container) != node->is_inclusive_ancestor_of(m_end_container);
 }
 
 // https://dom.spec.whatwg.org/#dom-range-insertnode

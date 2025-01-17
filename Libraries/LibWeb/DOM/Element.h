@@ -211,6 +211,7 @@ public:
 
     void reset_animated_css_properties();
 
+    GC::Ptr<CSS::ElementInlineCSSStyleDeclaration> inline_style() { return m_inline_style; }
     GC::Ptr<CSS::ElementInlineCSSStyleDeclaration const> inline_style() const { return m_inline_style; }
 
     CSS::CSSStyleDeclaration* style_for_bindings();
@@ -314,6 +315,8 @@ public:
     virtual bool exclude_from_accessibility_tree() const override;
 
     virtual bool include_in_accessibility_tree() const override;
+
+    virtual Element const* to_element() const override { return this; }
 
     bool is_hidden() const;
     bool has_hidden_ancestor() const;

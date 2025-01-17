@@ -92,7 +92,7 @@ void HTMLElement::set_dir(String const& dir)
 
 bool HTMLElement::is_focusable() const
 {
-    return is_editing_host();
+    return is_editing_host() || get_attribute(HTML::AttributeNames::tabindex).has_value();
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-iscontenteditable
@@ -612,7 +612,7 @@ void HTMLElement::attribute_changed(FlyString const& name, Optional<String> cons
 #undef __ENUMERATE
 }
 
-WebIDL::ExceptionOr<void> HTMLElement::cloned(Web::DOM::Node& copy, bool clone_children)
+WebIDL::ExceptionOr<void> HTMLElement::cloned(Web::DOM::Node& copy, bool clone_children) const
 {
     TRY(Base::cloned(copy, clone_children));
     TRY(HTMLOrSVGElement::cloned(copy, clone_children));

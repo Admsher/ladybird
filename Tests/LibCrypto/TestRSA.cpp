@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Peter Bocan  <me@pbocan.net>
+ * Copyright (c) 2025, Altomani Gianluca <altomanigianluca@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -25,10 +26,7 @@ TEST_CASE(test_RSA_raw_encrypt)
         "8126832723025844890518845777858816391166654950553329127845898924164623511718747856014227624997335860970996746552094406240834082304784428582653994490504519"_bigint,
         "65537"_bigint,
     });
-    ByteBuffer buffer = {};
-    buffer.resize(rsa.output_size());
-    auto buf = buffer.bytes();
-    rsa.encrypt(data, buf);
+    auto buf = TRY_OR_FAIL(rsa.encrypt(data));
     EXPECT(memcmp(result, buf.data(), buf.size()) == 0);
 }
 
@@ -36,14 +34,13 @@ TEST_CASE(test_RSA_raw_encrypt)
 TEST_CASE(test_RSA_PKCS_1_encrypt)
 {
     ByteBuffer data { "hellohellohellohellohellohellohellohellohello123-"_b };
-    Crypto::PK::RSA_PKCS1_EME rsa(Crypto::PK::RSA::generate_key_pair(1024));
-    ByteBuffer buffer = {};
-    buffer.resize(rsa.output_size());
-    auto buf = buffer.bytes();
-    rsa.encrypt(data, buf);
-    rsa.decrypt(buf, buf);
 
-    EXPECT(memcmp(buf.data(), "hellohellohellohellohellohellohellohellohello123-", 49) == 0);
+    auto keypair = TRY_OR_FAIL(Crypto::PK::RSA::generate_key_pair(1024));
+    Crypto::PK::RSA_PKCS1_EME rsa(keypair);
+    auto enc = TRY_OR_FAIL(rsa.encrypt(data));
+    auto dec = TRY_OR_FAIL(rsa.decrypt(enc));
+
+    EXPECT(memcmp(dec.data(), "hellohellohellohellohellohellohellohellohello123-", 49) == 0);
 }
 
 // RSA | ASN1 PKCS1 DER / PEM encoded Key import
@@ -136,40 +133,47 @@ c8yGzl89pYST
 
     EXPECT_EQ(keypem, StringView(priv_pem));
 
-    ByteBuffer enc_buffer = {};
-    enc_buffer.resize(rsa_from_pair.output_size());
+    ByteBuffer msg_buffer = {};
+    msg_buffer.resize(rsa_from_pair.output_size());
 
-    ByteBuffer dec_buffer = {};
-    dec_buffer.resize(rsa_from_pair.output_size());
+    auto msg = msg_buffer.bytes();
+    msg.overwrite(0, "WellHelloFriends", 16);
 
-    auto enc = enc_buffer.bytes();
-    auto dec = dec_buffer.bytes();
-
-    dec.overwrite(0, "WellHelloFriends", 16);
-
-    rsa_from_pair.encrypt(dec, enc);
-    rsa_from_pem.decrypt(enc, dec);
+    auto enc = TRY_OR_FAIL(rsa_from_pair.encrypt(msg));
+    auto dec = TRY_OR_FAIL(rsa_from_pem.decrypt(enc));
 
     EXPECT_EQ(memcmp(dec.data(), "WellHelloFriends", 16), 0);
 }
 
 TEST_CASE(test_RSA_encrypt_decrypt)
 {
-    Crypto::PK::RSA rsa(Crypto::PK::RSA::generate_key_pair(1024));
+    auto keypair = TRY_OR_FAIL(Crypto::PK::RSA::generate_key_pair(1024));
+    Crypto::PK::RSA rsa(keypair);
 
-    ByteBuffer enc_buffer = {};
-    enc_buffer.resize(rsa.output_size());
+    ByteBuffer msg_buffer = {};
+    msg_buffer.resize(rsa.output_size());
 
-    ByteBuffer dec_buffer = {};
-    dec_buffer.resize(rsa.output_size());
+    auto msg = msg_buffer.bytes();
+    msg.overwrite(0, "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64);
 
-    auto enc = enc_buffer.bytes();
-    auto dec = dec_buffer.bytes();
+    auto enc = TRY_OR_FAIL(rsa.encrypt(msg));
+    auto dec = TRY_OR_FAIL(rsa.decrypt(enc));
 
-    enc.overwrite(0, "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64);
+    EXPECT(memcmp(dec.data(), "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64) == 0);
+}
 
-    rsa.encrypt(enc, dec);
-    rsa.decrypt(dec, enc);
+TEST_CASE(test_RSA_sign_verify)
+{
+    auto keypair = TRY_OR_FAIL(Crypto::PK::RSA::generate_key_pair(1024));
+    Crypto::PK::RSA rsa(keypair);
 
-    EXPECT(memcmp(enc.data(), "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64) == 0);
+    ByteBuffer msg_buffer = {};
+    msg_buffer.resize(rsa.output_size());
+
+    auto msg = msg_buffer.bytes();
+    msg.overwrite(0, "WellHelloFriendsWellHelloFriendsWellHelloFriendsWellHelloFriends", 64);
+
+    auto sig = TRY_OR_FAIL(rsa.sign(msg));
+    auto ok = TRY_OR_FAIL(rsa.verify(msg, sig));
+    EXPECT_EQ(ok, true);
 }

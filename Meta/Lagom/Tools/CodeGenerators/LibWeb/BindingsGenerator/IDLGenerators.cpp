@@ -4,7 +4,7 @@
  * Copyright (c) 2021-2023, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2022, Ali Mohammad Pur <mpfard@serenityos.org>
  * Copyright (c) 2023-2024, Kenneth Myhra <kennethmyhra@serenityos.org>
- * Copyright (c) 2023-2024, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2023-2025, Shannon Booth <shannon@serenityos.org>
  * Copyright (c) 2023-2024, Matthew Olsson <mattco@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -231,8 +231,14 @@ CppType idl_type_name_to_cpp_type(Type const& type, Interface const& interface)
     if (type.name() == "long" && !type.is_nullable())
         return { .name = "WebIDL::Long", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "any" || type.name() == "undefined")
+    if (type.name() == "any")
         return { .name = "JS::Value", .sequence_storage_type = SequenceStorageType::RootVector };
+
+    // NOTE: undefined is a somewhat special case that may be used in a union to represent the javascript 'undefined' (and
+    //       only ever js_undefined). Therefore, we say that the type is Empty here, so that a union of (T, undefined) is
+    //       generated as Variant<T, Empty>, which is then returned in the Variant's visit as undefined if it is Empty.
+    if (type.name() == "undefined")
+        return { .name = "Empty", .sequence_storage_type = SequenceStorageType::RootVector };
 
     if (type.name() == "object")
         return { .name = "GC::Root<JS::Object>", .sequence_storage_type = SequenceStorageType::Vector };
@@ -2077,9 +2083,7 @@ JS_DEFINE_NATIVE_FUNCTION(@class_name@::@function.name:snakecase@@overload_suffi
         if (function.extended_attributes.contains("CEReactions")) {
             // 1. Push a new element queue onto this object's relevant agent's custom element reactions stack.
             function_generator.append(R"~~~(
-    auto& relevant_agent = HTML::relevant_agent(*impl);
-    auto* custom_data = verify_cast<Bindings::WebEngineCustomData>(relevant_agent.custom_data());
-    auto& reactions_stack = custom_data->custom_element_reactions_stack;
+    auto& reactions_stack = HTML::relevant_agent(*impl).custom_element_reactions_stack;
     reactions_stack.element_queue_stack.append({});
 )~~~");
         }
@@ -3566,9 +3570,7 @@ JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.getter_callback@)
         if (attribute.extended_attributes.contains("CEReactions")) {
             // 1. Push a new element queue onto this object's relevant agent's custom element reactions stack.
             attribute_generator.append(R"~~~(
-    auto& relevant_agent = HTML::relevant_agent(*impl);
-    auto* custom_data = verify_cast<Bindings::WebEngineCustomData>(relevant_agent.custom_data());
-    auto& reactions_stack = custom_data->custom_element_reactions_stack;
+    auto& reactions_stack = HTML::relevant_agent(*impl).custom_element_reactions_stack;
     reactions_stack.element_queue_stack.append({});
 )~~~");
         }
@@ -3914,9 +3916,7 @@ JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.setter_callback@)
             if (attribute.extended_attributes.contains("CEReactions")) {
                 // 1. Push a new element queue onto this object's relevant agent's custom element reactions stack.
                 attribute_generator.append(R"~~~(
-    auto& relevant_agent = HTML::relevant_agent(*impl);
-    auto* custom_data = verify_cast<Bindings::WebEngineCustomData>(relevant_agent.custom_data());
-    auto& reactions_stack = custom_data->custom_element_reactions_stack;
+    auto& reactions_stack = HTML::relevant_agent(*impl).custom_element_reactions_stack;
     reactions_stack.element_queue_stack.append({});
 )~~~");
             }
@@ -4753,8 +4753,9 @@ void @constructor_class@::initialize(JS::Realm& realm)
     }
 
     generator.append(R"~~~(
-    define_direct_property(vm.names.prototype, &ensure_web_prototype<@prototype_class@>(realm, "@namespaced_name@"_fly_string), 0);
     define_direct_property(vm.names.length, JS::Value(@constructor.length@), JS::Attribute::Configurable);
+    define_direct_property(vm.names.name, JS::PrimitiveString::create(vm, "@namespaced_name@"_string), JS::Attribute::Configurable);
+    define_direct_property(vm.names.prototype, &ensure_web_prototype<@prototype_class@>(realm, "@namespaced_name@"_fly_string), 0);
 
 )~~~");
 
@@ -4911,6 +4912,7 @@ void generate_prototype_implementation(IDL::Interface const& interface, StringBu
 #include <LibWeb/DOM/NodeFilter.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/HTML/Numbers.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HTML/WindowProxy.h>
@@ -5069,6 +5071,7 @@ void generate_iterator_prototype_implementation(IDL::Interface const& interface,
     generator.set("name", ByteString::formatted("{}Iterator", interface.name));
     generator.set("parent_name", interface.parent_name);
     generator.set("prototype_class", ByteString::formatted("{}IteratorPrototype", interface.name));
+    generator.set("to_string_tag", ByteString::formatted("{} Iterator", interface.name));
     generator.set("prototype_base_class", interface.prototype_base_class);
     generator.set("fully_qualified_name", ByteString::formatted("{}Iterator", interface.fully_qualified_name));
     generator.set("possible_include_path", ByteString::formatted("{}Iterator", interface.name.replace("::"sv, "/"sv, ReplaceMode::All)));
@@ -5110,7 +5113,7 @@ void @prototype_class@::initialize(JS::Realm& realm)
     auto& vm = this->vm();
     Base::initialize(realm);
     define_native_function(realm, vm.names.next, next, 0, JS::Attribute::Writable | JS::Attribute::Enumerable | JS::Attribute::Configurable);
-    define_direct_property(vm.well_known_symbol_to_string_tag(), JS::PrimitiveString::create(vm, "Iterator"_string), JS::Attribute::Configurable);
+    define_direct_property(vm.well_known_symbol_to_string_tag(), JS::PrimitiveString::create(vm, "@to_string_tag@"_string), JS::Attribute::Configurable);
 }
 
 static JS::ThrowCompletionOr<@fully_qualified_name@*> impl_from(JS::VM& vm)

@@ -53,23 +53,23 @@ String generate_calculation_type_check(StringView calculation_variable_name, Str
         first_type_check = false;
 
         if (allowed_type_name == "<angle>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_angle()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_angle(percentages_resolve_as)"sv);
         } else if (allowed_type_name == "<dimension>"sv) {
             builder.appendff("{}.{}", calculation_variable_name, "matches_dimension()"sv);
         } else if (allowed_type_name == "<flex>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_flex()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_flex(percentages_resolve_as)"sv);
         } else if (allowed_type_name == "<frequency>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_frequency()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_frequency(percentages_resolve_as)"sv);
         } else if (allowed_type_name == "<length>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_length()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_length(percentages_resolve_as)"sv);
         } else if (allowed_type_name == "<number>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_number()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_number(percentages_resolve_as)"sv);
         } else if (allowed_type_name == "<percentage>"sv) {
             builder.appendff("{}.{}", calculation_variable_name, "matches_percentage()"sv);
         } else if (allowed_type_name == "<resolution>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_resolution()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_resolution(percentages_resolve_as)"sv);
         } else if (allowed_type_name == "<time>"sv) {
-            builder.appendff("{}.{}", calculation_variable_name, "matches_time()"sv);
+            builder.appendff("{}.{}", calculation_variable_name, "matches_time(percentages_resolve_as)"sv);
         } else {
             dbgln("I don't know what '{}' is!", allowed_type_name);
             VERIFY_NOT_REACHED();
@@ -116,10 +116,11 @@ static Optional<RoundingStrategy> parse_rounding_strategy(Vector<ComponentValue>
     return keyword_to_rounding_strategy(maybe_keyword.value());
 }
 
-OwnPtr<CalculationNode> Parser::parse_math_function(Function const& function)
+OwnPtr<CalculationNode> Parser::parse_math_function(Function const& function, CalculationContext const& context)
 {
     TokenStream stream { function.value };
     auto arguments = parse_a_comma_separated_list_of_component_values(stream);
+    auto const& percentages_resolve_as = context.percentages_resolve_as;
 )~~~");
 
     functions_data.for_each_member([&](auto& name, JsonValue const& value) -> void {
@@ -140,7 +141,7 @@ OwnPtr<CalculationNode> Parser::parse_math_function(Function const& function)
         parsed_arguments.ensure_capacity(arguments.size());
 
         for (auto& argument : arguments) {
-            auto calculation_node = parse_a_calculation(argument);
+            auto calculation_node = parse_a_calculation(argument, context);
             if (!calculation_node) {
                 dbgln_if(CSS_PARSER_DEBUG, "@name:lowercase@() argument #{} is not a valid calculation", parsed_arguments.size());
                 return nullptr;
@@ -243,7 +244,7 @@ OwnPtr<CalculationNode> Parser::parse_math_function(Function const& function)
                     // NOTE: This assumes everything not handled above is a calculation node of some kind.
                     parameter_is_calculation = true;
                     parameter_generator.set("parameter_type", "OwnPtr<CalculationNode>"_string);
-                    parameter_generator.set("parse_function", "parse_a_calculation(arguments[argument_index])"_string);
+                    parameter_generator.set("parse_function", "parse_a_calculation(arguments[argument_index], context)"_string);
                     parameter_generator.set("check_function", " != nullptr"_string);
                     parameter_generator.set("release_function", ".release_nonnull()"_string);
 

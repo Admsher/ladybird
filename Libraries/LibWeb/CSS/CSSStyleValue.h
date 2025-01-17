@@ -127,8 +127,6 @@ public:
         Ratio,
         Rect,
         Resolution,
-        Rotation,
-        Scale,
         ScrollbarGutter,
         Shadow,
         Shorthand,
@@ -136,7 +134,6 @@ public:
         Time,
         Transformation,
         Transition,
-        Translation,
         Unresolved,
         URL,
         ValueList,
@@ -299,14 +296,6 @@ public:
     ResolutionStyleValue const& as_resolution() const;
     ResolutionStyleValue& as_resolution() { return const_cast<ResolutionStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_resolution()); }
 
-    bool is_rotation() const { return type() == Type::Rotation; }
-    RotationStyleValue const& as_rotation() const;
-    RotationStyleValue& as_rotation() { return const_cast<RotationStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_rotation()); }
-
-    bool is_scale() const { return type() == Type::Scale; }
-    ScaleStyleValue const& as_scale() const;
-    ScaleStyleValue& as_scale() { return const_cast<ScaleStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_scale()); }
-
     bool is_scrollbar_gutter() const { return type() == Type::ScrollbarGutter; }
     ScrollbarGutterStyleValue const& as_scrollbar_gutter() const;
     ScrollbarGutterStyleValue& as_scrollbar_gutter() { return const_cast<ScrollbarGutterStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_scrollbar_gutter()); }
@@ -334,10 +323,6 @@ public:
     bool is_transition() const { return type() == Type::Transition; }
     TransitionStyleValue const& as_transition() const;
     TransitionStyleValue& as_transition() { return const_cast<TransitionStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_transition()); }
-
-    bool is_translation() const { return type() == Type::Translation; }
-    TranslationStyleValue const& as_translation() const;
-    TranslationStyleValue& as_translation() { return const_cast<TranslationStyleValue&>(const_cast<CSSStyleValue const&>(*this).as_translation()); }
 
     bool is_unresolved() const { return type() == Type::Unresolved; }
     UnresolvedStyleValue const& as_unresolved() const;

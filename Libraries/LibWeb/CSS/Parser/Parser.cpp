@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2018-2024, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2020-2021, the SerenityOS developers.
- * Copyright (c) 2021-2024, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
  * Copyright (c) 2022, MacDue <macdue@dueutil.tech>
  * Copyright (c) 2024, Shannon Booth <shannon@serenityos.org>
@@ -69,8 +69,6 @@
 #include <LibWeb/CSS/StyleValues/RatioStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RectStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ResolutionStyleValue.h>
-#include <LibWeb/CSS/StyleValues/RotationStyleValue.h>
-#include <LibWeb/CSS/StyleValues/ScaleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ScrollbarGutterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ShadowStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ShorthandStyleValue.h>
@@ -79,7 +77,6 @@
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransitionStyleValue.h>
-#include <LibWeb/CSS/StyleValues/TranslationStyleValue.h>
 #include <LibWeb/CSS/StyleValues/URLStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
 #include <LibWeb/Dump.h>
@@ -1922,7 +1919,30 @@ RefPtr<CalculatedStyleValue> Parser::parse_calculated_value(ComponentValue const
 
     auto const& function = component_value.function();
 
-    auto function_node = parse_a_calc_function_node(function);
+    CalculationContext context {};
+    for (auto const& value_context : m_value_context.in_reverse()) {
+        auto percentages_resolve_as = value_context.visit(
+            [](PropertyID property_id) -> Optional<ValueType> {
+                return property_resolves_percentages_relative_to(property_id);
+            },
+            [](FunctionContext const& function) -> Optional<ValueType> {
+                // Gradients resolve percentages as lengths relative to the gradient-box.
+                if (function.name.is_one_of_ignoring_ascii_case(
+                        "linear-gradient"sv, "repeating-linear-gradient"sv,
+                        "radial-gradient"sv, "repeating-radial-gradient"sv,
+                        "conic-gradient"sv, "repeating-conic-gradient"sv)) {
+                    return ValueType::Length;
+                }
+                // FIXME: Add other functions that provide a context for resolving percentages
+                return {};
+            });
+        if (percentages_resolve_as.has_value()) {
+            context.percentages_resolve_as = move(percentages_resolve_as);
+            break;
+        }
+    }
+
+    auto function_node = parse_a_calc_function_node(function, context);
     if (!function_node)
         return nullptr;
 
@@ -1930,15 +1950,17 @@ RefPtr<CalculatedStyleValue> Parser::parse_calculated_value(ComponentValue const
     if (!function_type.has_value())
         return nullptr;
 
-    return CalculatedStyleValue::create(function_node.release_nonnull(), function_type.release_value());
+    return CalculatedStyleValue::create(function_node.release_nonnull(), function_type.release_value(), context);
 }
 
-OwnPtr<CalculationNode> Parser::parse_a_calc_function_node(Function const& function)
+OwnPtr<CalculationNode> Parser::parse_a_calc_function_node(Function const& function, CalculationContext const& context)
 {
-    if (function.name.equals_ignoring_ascii_case("calc"sv))
-        return parse_a_calculation(function.value);
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { function.name });
 
-    if (auto maybe_function = parse_math_function(function))
+    if (function.name.equals_ignoring_ascii_case("calc"sv))
+        return parse_a_calculation(function.value, context);
+
+    if (auto maybe_function = parse_math_function(function, context))
         return maybe_function;
 
     return nullptr;
@@ -1976,13 +1998,9 @@ Optional<Dimension> Parser::parse_dimension(ComponentValue const& component_valu
         auto numeric_value = component_value.token().number_value();
         if (numeric_value == 0)
             return Length::make_px(0);
-        if (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength)) {
-            // https://quirks.spec.whatwg.org/#quirky-length-value
-            // FIXME: Disallow quirk when inside a CSS sub-expression (like `calc()`)
-            // "The <quirky-length> value must not be supported in arguments to CSS expressions other than the rect()
-            // expression, and must not be supported in the supports() static method of the CSS interface."
+
+        if (context_allows_quirky_length())
             return Length::make_px(CSSPixels::nearest_value_for(numeric_value));
-        }
     }
 
     return {};
@@ -2663,6 +2681,38 @@ RefPtr<CSSStyleValue> Parser::parse_frequency_percentage_value(TokenStream<Compo
     return nullptr;
 }
 
+bool Parser::context_allows_quirky_length() const
+{
+    if (!m_context.in_quirks_mode())
+        return false;
+
+    // https://drafts.csswg.org/css-values-4/#deprecated-quirky-length
+    // "When CSS is being parsed in quirks mode, <quirky-length> is a type of <length> that is only valid in certain properties:"
+    // (NOTE: List skipped for brevity; quirks data is assigned in Properties.json)
+    // "It is not valid in properties that include or reference these properties, such as the background shorthand,
+    // or inside functional notations such as calc(), except that they must be allowed in rect() in the clip property."
+
+    // So, it must be allowed in the top-level ValueParsingContext, and then not disallowed by any child contexts.
+
+    Optional<PropertyID> top_level_property;
+    if (!m_value_context.is_empty()) {
+        top_level_property = m_value_context.first().visit(
+            [](PropertyID const& property_id) -> Optional<PropertyID> { return property_id; },
+            [](auto const&) -> Optional<PropertyID> { return OptionalNone {}; });
+    }
+
+    bool unitless_length_allowed = top_level_property.has_value() && property_has_quirk(top_level_property.value(), Quirk::UnitlessLength);
+    for (auto i = 1u; i < m_value_context.size() && unitless_length_allowed; i++) {
+        unitless_length_allowed = m_value_context[i].visit(
+            [](PropertyID const& property_id) { return property_has_quirk(property_id, Quirk::UnitlessLength); },
+            [top_level_property](Parser::FunctionContext const& function_context) {
+                return function_context.name == "rect"sv && top_level_property == PropertyID::Clip;
+            });
+    }
+
+    return unitless_length_allowed;
+}
+
 RefPtr<CSSStyleValue> Parser::parse_length_value(TokenStream<ComponentValue>& tokens)
 {
     if (tokens.next_token().is(Token::Type::Dimension)) {
@@ -2682,11 +2732,7 @@ RefPtr<CSSStyleValue> Parser::parse_length_value(TokenStream<ComponentValue>& to
             transaction.commit();
             return LengthStyleValue::create(Length::make_px(0));
         }
-        if (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength)) {
-            // https://quirks.spec.whatwg.org/#quirky-length-value
-            // FIXME: Disallow quirk when inside a CSS sub-expression (like `calc()`)
-            // "The <quirky-length> value must not be supported in arguments to CSS expressions other than the rect()
-            // expression, and must not be supported in the supports() static method of the CSS interface."
+        if (context_allows_quirky_length()) {
             transaction.commit();
             return LengthStyleValue::create(Length::make_px(CSSPixels::nearest_value_for(numeric_value)));
         }
@@ -2733,11 +2779,7 @@ RefPtr<CSSStyleValue> Parser::parse_length_percentage_value(TokenStream<Componen
             transaction.commit();
             return LengthStyleValue::create(Length::make_px(0));
         }
-        if (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength)) {
-            // https://quirks.spec.whatwg.org/#quirky-length-value
-            // FIXME: Disallow quirk when inside a CSS sub-expression (like `calc()`)
-            // "The <quirky-length> value must not be supported in arguments to CSS expressions other than the rect()
-            // expression, and must not be supported in the supports() static method of the CSS interface."
+        if (context_allows_quirky_length()) {
             transaction.commit();
             return LengthStyleValue::create(Length::make_px(CSSPixels::nearest_value_for(numeric_value)));
         }
@@ -2852,6 +2894,8 @@ RefPtr<CSSStyleValue> Parser::parse_rect_value(TokenStream<ComponentValue>& toke
     auto const& function_token = tokens.consume_a_token();
     if (!function_token.is_function("rect"sv))
         return nullptr;
+
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { "rect"sv });
 
     Vector<Length, 4> params;
     auto argument_tokens = TokenStream { function_token.function().value };
@@ -2988,6 +3032,8 @@ RefPtr<CSSStyleValue> Parser::parse_rgb_color_value(TokenStream<ComponentValue>&
     if (!function_token.is_function("rgb"sv) && !function_token.is_function("rgba"sv))
         return {};
 
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { function_token.function().name });
+
     RefPtr<CSSStyleValue> red;
     RefPtr<CSSStyleValue> green;
     RefPtr<CSSStyleValue> blue;
@@ -3110,6 +3156,8 @@ RefPtr<CSSStyleValue> Parser::parse_hsl_color_value(TokenStream<ComponentValue>&
     if (!function_token.is_function("hsl"sv) && !function_token.is_function("hsla"sv))
         return {};
 
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { function_token.function().name });
+
     RefPtr<CSSStyleValue> h;
     RefPtr<CSSStyleValue> s;
     RefPtr<CSSStyleValue> l;
@@ -3210,6 +3258,8 @@ RefPtr<CSSStyleValue> Parser::parse_hwb_color_value(TokenStream<ComponentValue>&
     auto& function_token = outer_tokens.consume_a_token();
     if (!function_token.is_function("hwb"sv))
         return {};
+
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { function_token.function().name });
 
     RefPtr<CSSStyleValue> h;
     RefPtr<CSSStyleValue> w;
@@ -3444,6 +3494,8 @@ RefPtr<CSSStyleValue> Parser::parse_color_function(TokenStream<ComponentValue>& 
     if (!function_token.is_function("color"sv))
         return {};
 
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { function_token.function().name });
+
     auto inner_tokens = TokenStream { function_token.function().value };
     inner_tokens.discard_whitespace();
 
@@ -3579,66 +3631,89 @@ RefPtr<CSSStyleValue> Parser::parse_color_value(TokenStream<ComponentValue>& tok
         return {};
     }
 
-    // https://quirks.spec.whatwg.org/#the-hashless-hex-color-quirk
-    if (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::HashlessHexColor)) {
-        // The value of a quirky color is obtained from the possible component values using the following algorithm,
-        // aborting on the first step that returns a value:
+    // https://drafts.csswg.org/css-color-4/#quirky-color
+    if (m_context.in_quirks_mode()) {
+        // "When CSS is being parsed in quirks mode, <quirky-color> is a type of <color> that is only valid in certain properties:"
+        // (NOTE: List skipped for brevity; quirks data is assigned in Properties.json)
+        // "It is not valid in properties that include or reference these properties, such as the background shorthand,
+        // or inside functional notations such as color-mix()"
 
-        // 1. Let cv be the component value.
-        auto const& cv = component_value;
-        String serialization;
-        // 2. If cv is a <number-token> or a <dimension-token>, follow these substeps:
-        if (cv.is(Token::Type::Number) || cv.is(Token::Type::Dimension)) {
-            // 1. If cv’s type flag is not "integer", return an error.
-            //    This means that values that happen to use scientific notation, e.g., 5e5e5e, will fail to parse.
-            if (!cv.token().number().is_integer())
-                return {};
+        bool quirky_color_allowed = false;
+        if (!m_value_context.is_empty()) {
+            quirky_color_allowed = m_value_context.first().visit(
+                [](PropertyID const& property_id) { return property_has_quirk(property_id, Quirk::HashlessHexColor); },
+                [](FunctionContext const&) { return false; });
+        }
+        for (auto i = 1u; i < m_value_context.size() && quirky_color_allowed; i++) {
+            quirky_color_allowed = m_value_context[i].visit(
+                [](PropertyID const& property_id) { return property_has_quirk(property_id, Quirk::UnitlessLength); },
+                [](FunctionContext const&) {
+                    return false;
+                });
+        }
+        if (quirky_color_allowed) {
+            // NOTE: This algorithm is no longer in the spec, since the concept got moved and renamed. However, it works,
+            //       and so we might as well keep using it.
 
-            // 2. If cv’s value is less than zero, return an error.
-            auto value = cv.is(Token::Type::Number) ? cv.token().to_integer() : cv.token().dimension_value_int();
-            if (value < 0)
-                return {};
+            // The value of a quirky color is obtained from the possible component values using the following algorithm,
+            // aborting on the first step that returns a value:
 
-            // 3. Let serialization be the serialization of cv’s value, as a base-ten integer using digits 0-9 (U+0030 to U+0039) in the shortest form possible.
-            StringBuilder serialization_builder;
-            serialization_builder.appendff("{}", value);
+            // 1. Let cv be the component value.
+            auto const& cv = component_value;
+            String serialization;
+            // 2. If cv is a <number-token> or a <dimension-token>, follow these substeps:
+            if (cv.is(Token::Type::Number) || cv.is(Token::Type::Dimension)) {
+                // 1. If cv’s type flag is not "integer", return an error.
+                //    This means that values that happen to use scientific notation, e.g., 5e5e5e, will fail to parse.
+                if (!cv.token().number().is_integer())
+                    return {};
 
-            // 4. If cv is a <dimension-token>, append the unit to serialization.
-            if (cv.is(Token::Type::Dimension))
-                serialization_builder.append(cv.token().dimension_unit());
+                // 2. If cv’s value is less than zero, return an error.
+                auto value = cv.is(Token::Type::Number) ? cv.token().to_integer() : cv.token().dimension_value_int();
+                if (value < 0)
+                    return {};
 
-            // 5. If serialization consists of fewer than six characters, prepend zeros (U+0030) so that it becomes six characters.
-            serialization = MUST(serialization_builder.to_string());
-            if (serialization_builder.length() < 6) {
-                StringBuilder builder;
-                for (size_t i = 0; i < (6 - serialization_builder.length()); i++)
-                    builder.append('0');
-                builder.append(serialization_builder.string_view());
-                serialization = MUST(builder.to_string());
+                // 3. Let serialization be the serialization of cv’s value, as a base-ten integer using digits 0-9 (U+0030 to U+0039) in the shortest form possible.
+                StringBuilder serialization_builder;
+                serialization_builder.appendff("{}", value);
+
+                // 4. If cv is a <dimension-token>, append the unit to serialization.
+                if (cv.is(Token::Type::Dimension))
+                    serialization_builder.append(cv.token().dimension_unit());
+
+                // 5. If serialization consists of fewer than six characters, prepend zeros (U+0030) so that it becomes six characters.
+                serialization = MUST(serialization_builder.to_string());
+                if (serialization_builder.length() < 6) {
+                    StringBuilder builder;
+                    for (size_t i = 0; i < (6 - serialization_builder.length()); i++)
+                        builder.append('0');
+                    builder.append(serialization_builder.string_view());
+                    serialization = MUST(builder.to_string());
+                }
             }
-        }
-        // 3. Otherwise, cv is an <ident-token>; let serialization be cv’s value.
-        else {
-            if (!cv.is(Token::Type::Ident))
+            // 3. Otherwise, cv is an <ident-token>; let serialization be cv’s value.
+            else {
+                if (!cv.is(Token::Type::Ident))
+                    return {};
+                serialization = cv.token().ident().to_string();
+            }
+
+            // 4. If serialization does not consist of three or six characters, return an error.
+            if (serialization.bytes().size() != 3 && serialization.bytes().size() != 6)
                 return {};
-            serialization = cv.token().ident().to_string();
-        }
 
-        // 4. If serialization does not consist of three or six characters, return an error.
-        if (serialization.bytes().size() != 3 && serialization.bytes().size() != 6)
-            return {};
+            // 5. If serialization contains any characters not in the range [0-9A-Fa-f] (U+0030 to U+0039, U+0041 to U+0046, U+0061 to U+0066), return an error.
+            for (auto c : serialization.bytes_as_string_view()) {
+                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
+                    return {};
+            }
 
-        // 5. If serialization contains any characters not in the range [0-9A-Fa-f] (U+0030 to U+0039, U+0041 to U+0046, U+0061 to U+0066), return an error.
-        for (auto c : serialization.bytes_as_string_view()) {
-            if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
-                return {};
-        }
-
-        // 6. Return the concatenation of "#" (U+0023) and serialization.
-        auto color = Color::from_string(MUST(String::formatted("#{}", serialization)));
-        if (color.has_value()) {
-            transaction.commit();
-            return CSSColorValue::create_from_color(color.release_value());
+            // 6. Return the concatenation of "#" (U+0023) and serialization.
+            auto color = Color::from_string(MUST(String::formatted("#{}", serialization)));
+            if (color.has_value()) {
+                transaction.commit();
+                return CSSColorValue::create_from_color(color.release_value());
+            }
         }
     }
 
@@ -3759,6 +3834,8 @@ RefPtr<CSSStyleValue> Parser::parse_counter_value(TokenStream<ComponentValue>& t
     if (token.is_function("counter"sv)) {
         // counter() = counter( <counter-name>, <counter-style>? )
         auto& function = token.function();
+        auto context_guard = push_temporary_value_parsing_context(FunctionContext { function.name });
+
         TokenStream function_tokens { function.value };
         auto function_values = parse_a_comma_separated_list_of_component_values(function_tokens);
         if (function_values.is_empty() || function_values.size() > 2)
@@ -3787,6 +3864,8 @@ RefPtr<CSSStyleValue> Parser::parse_counter_value(TokenStream<ComponentValue>& t
     if (token.is_function("counters"sv)) {
         // counters() = counters( <counter-name>, <string>, <counter-style>? )
         auto& function = token.function();
+        auto context_guard = push_temporary_value_parsing_context(FunctionContext { function.name });
+
         TokenStream function_tokens { function.value };
         auto function_values = parse_a_comma_separated_list_of_component_values(function_tokens);
         if (function_values.size() < 2 || function_values.size() > 3)
@@ -5157,7 +5236,7 @@ RefPtr<CSSStyleValue> Parser::parse_rotate_value(TokenStream<ComponentValue>& to
 
         // <angle>
         if (auto angle = parse_angle_value(tokens))
-            return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(0), NumberStyleValue::create(0), NumberStyleValue::create(1));
+            return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::Rotate, { angle.release_nonnull() });
     }
 
     auto parse_one_of_xyz = [&]() -> Optional<ComponentValue const&> {
@@ -5178,11 +5257,11 @@ RefPtr<CSSStyleValue> Parser::parse_rotate_value(TokenStream<ComponentValue>& to
         if (auto axis = parse_one_of_xyz(); axis.has_value()) {
             if (auto angle = parse_angle_value(tokens); angle) {
                 if (axis->is_ident("x"sv))
-                    return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(1), NumberStyleValue::create(0), NumberStyleValue::create(0));
+                    return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::RotateX, { angle.release_nonnull() });
                 if (axis->is_ident("y"sv))
-                    return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(0), NumberStyleValue::create(1), NumberStyleValue::create(0));
+                    return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::RotateY, { angle.release_nonnull() });
                 if (axis->is_ident("z"sv))
-                    return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(0), NumberStyleValue::create(0), NumberStyleValue::create(1));
+                    return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::RotateZ, { angle.release_nonnull() });
             }
         }
 
@@ -5190,11 +5269,11 @@ RefPtr<CSSStyleValue> Parser::parse_rotate_value(TokenStream<ComponentValue>& to
         if (auto angle = parse_angle_value(tokens); angle) {
             if (auto axis = parse_one_of_xyz(); axis.has_value()) {
                 if (axis->is_ident("x"sv))
-                    return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(1), NumberStyleValue::create(0), NumberStyleValue::create(0));
+                    return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::RotateX, { angle.release_nonnull() });
                 if (axis->is_ident("y"sv))
-                    return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(0), NumberStyleValue::create(1), NumberStyleValue::create(0));
+                    return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::RotateY, { angle.release_nonnull() });
                 if (axis->is_ident("z"sv))
-                    return RotationStyleValue::create(angle.release_nonnull(), NumberStyleValue::create(0), NumberStyleValue::create(0), NumberStyleValue::create(1));
+                    return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::RotateZ, { angle.release_nonnull() });
             }
         }
     }
@@ -5219,7 +5298,7 @@ RefPtr<CSSStyleValue> Parser::parse_rotate_value(TokenStream<ComponentValue>& to
         if (auto maybe_numbers = parse_three_numbers(); maybe_numbers.has_value()) {
             if (auto angle = parse_angle_value(tokens); angle) {
                 auto numbers = maybe_numbers.release_value();
-                return RotationStyleValue::create(angle.release_nonnull(), numbers[0], numbers[1], numbers[2]);
+                return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::Rotate3d, { numbers[0], numbers[1], numbers[2], angle.release_nonnull() });
             }
         }
 
@@ -5227,7 +5306,7 @@ RefPtr<CSSStyleValue> Parser::parse_rotate_value(TokenStream<ComponentValue>& to
         if (auto angle = parse_angle_value(tokens); angle) {
             if (auto maybe_numbers = parse_three_numbers(); maybe_numbers.has_value()) {
                 auto numbers = maybe_numbers.release_value();
-                return RotationStyleValue::create(angle.release_nonnull(), numbers[0], numbers[1], numbers[2]);
+                return TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::Rotate3d, { numbers[0], numbers[1], numbers[2], angle.release_nonnull() });
             }
         }
     }
@@ -5649,6 +5728,8 @@ RefPtr<CSSStyleValue> Parser::parse_filter_value_list_value(TokenStream<Componen
         auto filter_token = parse_filter_function_name(token.function().name);
         if (!filter_token.has_value())
             return nullptr;
+
+        auto context_guard = push_temporary_value_parsing_context(FunctionContext { token.function().name });
         auto filter_function = parse_filter_function(*filter_token, token.function().value);
         if (!filter_function.has_value())
             return nullptr;
@@ -6654,6 +6735,8 @@ Vector<ParsedFontFace::Source> Parser::parse_font_face_src(TokenStream<T>& compo
 
             auto const& function = maybe_function.function();
             if (function.name.equals_ignoring_ascii_case("format"sv)) {
+                auto context_guard = push_temporary_value_parsing_context(FunctionContext { function.name });
+
                 TokenStream format_tokens { function.value };
                 format_tokens.discard_whitespace();
                 auto const& format_name_token = format_tokens.consume_a_token();
@@ -6815,6 +6898,8 @@ RefPtr<CSSStyleValue> Parser::parse_math_depth_value(TokenStream<ComponentValue>
 
     // add(<integer>)
     if (token.is_function("add"sv)) {
+        auto context_guard = push_temporary_value_parsing_context(FunctionContext { token.function().name });
+
         auto add_tokens = TokenStream { token.function().value };
         add_tokens.discard_whitespace();
         auto const& integer_token = add_tokens.consume_a_token();
@@ -7105,6 +7190,8 @@ RefPtr<CSSStyleValue> Parser::parse_easing_value(TokenStream<ComponentValue>& to
         argument.remove_all_matching([](auto& value) { return value.is(Token::Type::Whitespace); });
 
     auto name = part.function().name;
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { name });
+
     if (name.equals_ignoring_ascii_case("linear"sv)) {
         // linear() = linear( [ <number> && <percentage>{0,2} ]# )
         Vector<EasingStyleValue::Linear::Stop> stops;
@@ -7255,6 +7342,9 @@ RefPtr<CSSStyleValue> Parser::parse_transform_value(TokenStream<ComponentValue>&
         auto maybe_function = transform_function_from_string(part.function().name);
         if (!maybe_function.has_value())
             return nullptr;
+
+        auto context_guard = push_temporary_value_parsing_context(FunctionContext { part.function().name });
+
         auto function = maybe_function.release_value();
         auto function_metadata = transform_function_metadata(function);
 
@@ -7333,7 +7423,7 @@ RefPtr<CSSStyleValue> Parser::parse_transform_value(TokenStream<ComponentValue>&
                 return nullptr;
         }
 
-        transformations.append(TransformationStyleValue::create(function, move(values)));
+        transformations.append(TransformationStyleValue::create(PropertyID::Transform, function, move(values)));
     }
     transaction.commit();
     return StyleValueList::create(move(transformations), StyleValueList::Separator::Space);
@@ -7579,21 +7669,21 @@ RefPtr<CSSStyleValue> Parser::parse_translate_value(TokenStream<ComponentValue>&
 
     auto transaction = tokens.begin_transaction();
 
-    auto maybe_x = parse_length_percentage(tokens);
-    if (!maybe_x.has_value())
+    auto maybe_x = parse_length_percentage_value(tokens);
+    if (!maybe_x)
         return nullptr;
 
     if (!tokens.has_next_token()) {
         transaction.commit();
-        return TranslationStyleValue::create(maybe_x.release_value(), LengthPercentage(Length::make_px(0)));
+        return TransformationStyleValue::create(PropertyID::Translate, TransformFunction::Translate, { maybe_x.release_nonnull(), LengthStyleValue::create(Length::make_px(0)) });
     }
 
-    auto maybe_y = parse_length_percentage(tokens);
-    if (!maybe_y.has_value())
+    auto maybe_y = parse_length_percentage_value(tokens);
+    if (!maybe_y)
         return nullptr;
 
     transaction.commit();
-    return TranslationStyleValue::create(maybe_x.release_value(), maybe_y.release_value());
+    return TransformationStyleValue::create(PropertyID::Translate, TransformFunction::Translate, { maybe_x.release_nonnull(), maybe_y.release_nonnull() });
 }
 
 RefPtr<CSSStyleValue> Parser::parse_scale_value(TokenStream<ComponentValue>& tokens)
@@ -7606,21 +7696,21 @@ RefPtr<CSSStyleValue> Parser::parse_scale_value(TokenStream<ComponentValue>& tok
 
     auto transaction = tokens.begin_transaction();
 
-    auto maybe_x = parse_number_percentage(tokens);
-    if (!maybe_x.has_value())
+    auto maybe_x = parse_number_percentage_value(tokens);
+    if (!maybe_x)
         return nullptr;
 
     if (!tokens.has_next_token()) {
         transaction.commit();
-        return ScaleStyleValue::create(maybe_x.value(), maybe_x.value());
+        return TransformationStyleValue::create(PropertyID::Scale, TransformFunction::Scale, { *maybe_x, *maybe_x });
     }
 
-    auto maybe_y = parse_number_percentage(tokens);
-    if (!maybe_y.has_value())
+    auto maybe_y = parse_number_percentage_value(tokens);
+    if (!maybe_y)
         return nullptr;
 
     transaction.commit();
-    return ScaleStyleValue::create(maybe_x.release_value(), maybe_y.release_value());
+    return TransformationStyleValue::create(PropertyID::Scale, TransformFunction::Scale, { maybe_x.release_nonnull(), maybe_y.release_nonnull() });
 }
 
 Optional<CSS::GridFitContent> Parser::parse_fit_content(Vector<ComponentValue> const& component_values)
@@ -7783,6 +7873,8 @@ Optional<CSS::ExplicitGridTrack> Parser::parse_track_sizing_function(ComponentVa
 {
     if (token.is_function()) {
         auto const& function_token = token.function();
+        auto context_guard = push_temporary_value_parsing_context(FunctionContext { function_token.name });
+
         if (function_token.name.equals_ignoring_ascii_case("repeat"sv)) {
             auto maybe_repeat = parse_repeat(function_token.value);
             if (maybe_repeat.has_value())
@@ -8398,7 +8490,8 @@ bool block_contains_var_or_attr(SimpleBlock const& block)
 
 Parser::ParseErrorOr<NonnullRefPtr<CSSStyleValue>> Parser::parse_css_value(PropertyID property_id, TokenStream<ComponentValue>& unprocessed_tokens, Optional<String> original_source_text)
 {
-    m_context.set_current_property_id(property_id);
+    auto context_guard = push_temporary_value_parsing_context(property_id);
+
     Vector<ComponentValue> component_values;
     bool contains_var_or_attr = false;
     bool const property_accepts_custom_ident = property_accepts_type(property_id, ValueType::CustomIdent);
@@ -8824,6 +8917,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     auto& peek_token = tokens.next_token();
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::EasingFunction); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_easing_function = parse_easing_value(tokens))
             return PropertyAndValue { *property, maybe_easing_function };
     }
@@ -8841,68 +8935,82 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
 
         // Custom idents
         if (auto property = any_property_accepts_type(property_ids, ValueType::CustomIdent); property.has_value()) {
+            auto context_guard = push_temporary_value_parsing_context(*property);
             if (auto custom_ident = parse_custom_ident_value(tokens, {}))
                 return PropertyAndValue { *property, custom_ident };
         }
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Color); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_color = parse_color_value(tokens))
             return PropertyAndValue { *property, maybe_color };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Counter); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_counter = parse_counter_value(tokens))
             return PropertyAndValue { *property, maybe_counter };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Image); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_image = parse_image_value(tokens))
             return PropertyAndValue { *property, maybe_image };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Position); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_position = parse_position_value(tokens))
             return PropertyAndValue { *property, maybe_position };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::BackgroundPosition); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_position = parse_position_value(tokens, PositionParsingMode::BackgroundPosition))
             return PropertyAndValue { *property, maybe_position };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::BasicShape); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_basic_shape = parse_basic_shape_value(tokens))
             return PropertyAndValue { *property, maybe_basic_shape };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Ratio); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_ratio = parse_ratio_value(tokens))
             return PropertyAndValue { *property, maybe_ratio };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::OpenTypeTag); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_rect = parse_opentype_tag_value(tokens))
             return PropertyAndValue { *property, maybe_rect };
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Rect); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto maybe_rect = parse_rect_value(tokens))
             return PropertyAndValue { *property, maybe_rect };
     }
 
     if (peek_token.is(Token::Type::String)) {
-        if (auto property = any_property_accepts_type(property_ids, ValueType::String); property.has_value())
+        if (auto property = any_property_accepts_type(property_ids, ValueType::String); property.has_value()) {
+            auto context_guard = push_temporary_value_parsing_context(*property);
             return PropertyAndValue { *property, StringStyleValue::create(tokens.consume_a_token().token().string()) };
+        }
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Url); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto url = parse_url_value(tokens))
             return PropertyAndValue { *property, url };
     }
 
     // <integer>/<number> come before <length>, so that 0 is not interpreted as a <length> in case both are allowed.
     if (auto property = any_property_accepts_type(property_ids, ValueType::Integer); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto value = parse_integer_value(tokens)) {
             if (value->is_calculated())
                 return PropertyAndValue { *property, value };
@@ -8912,6 +9020,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Number); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto value = parse_number_value(tokens)) {
             if (value->is_calculated())
                 return PropertyAndValue { *property, value };
@@ -8921,6 +9030,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Angle); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (property_accepts_type(*property, ValueType::Percentage)) {
             if (auto value = parse_angle_percentage_value(tokens)) {
                 if (value->is_calculated())
@@ -8940,6 +9050,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Flex); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto value = parse_flex_value(tokens)) {
             if (value->is_calculated())
                 return PropertyAndValue { *property, value };
@@ -8949,6 +9060,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Frequency); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (property_accepts_type(*property, ValueType::Percentage)) {
             if (auto value = parse_frequency_percentage_value(tokens)) {
                 if (value->is_calculated())
@@ -8968,6 +9080,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Length); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (property_accepts_type(*property, ValueType::Percentage)) {
             if (auto value = parse_length_percentage_value(tokens)) {
                 if (value->is_calculated())
@@ -8987,6 +9100,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Resolution); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto value = parse_resolution_value(tokens)) {
             if (value->is_calculated())
                 return PropertyAndValue { *property, value };
@@ -8996,6 +9110,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Time); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (property_accepts_type(*property, ValueType::Percentage)) {
             if (auto value = parse_time_percentage_value(tokens)) {
                 if (value->is_calculated())
@@ -9016,6 +9131,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
 
     // <percentage> is checked after the <foo-percentage> types.
     if (auto property = any_property_accepts_type(property_ids, ValueType::Percentage); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto value = parse_percentage_value(tokens)) {
             if (value->is_calculated())
                 return PropertyAndValue { *property, value };
@@ -9025,6 +9141,7 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
     }
 
     if (auto property = any_property_accepts_type(property_ids, ValueType::Paint); property.has_value()) {
+        auto context_guard = push_temporary_value_parsing_context(*property);
         if (auto value = parse_paint_value(tokens))
             return PropertyAndValue { *property, value.release_nonnull() };
     }
@@ -9134,15 +9251,15 @@ LengthOrCalculated Parser::Parser::parse_as_sizes_attribute(DOM::Element const& 
     return Length(100, Length::Type::Vw);
 }
 
-OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node const& node)
+OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node const& node, CalculationContext const& context)
 {
     return node.visit(
-        [this](NonnullOwnPtr<CalcParsing::ProductNode> const& product_node) -> OwnPtr<CalculationNode> {
+        [this, &context](NonnullOwnPtr<CalcParsing::ProductNode> const& product_node) -> OwnPtr<CalculationNode> {
             Vector<NonnullOwnPtr<CalculationNode>> children;
             children.ensure_capacity(product_node->children.size());
 
             for (auto const& child : product_node->children) {
-                if (auto child_as_node = convert_to_calculation_node(child)) {
+                if (auto child_as_node = convert_to_calculation_node(child, context)) {
                     children.append(child_as_node.release_nonnull());
                 } else {
                     return nullptr;
@@ -9151,12 +9268,12 @@ OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node co
 
             return ProductCalculationNode::create(move(children));
         },
-        [this](NonnullOwnPtr<CalcParsing::SumNode> const& sum_node) -> OwnPtr<CalculationNode> {
+        [this, &context](NonnullOwnPtr<CalcParsing::SumNode> const& sum_node) -> OwnPtr<CalculationNode> {
             Vector<NonnullOwnPtr<CalculationNode>> children;
             children.ensure_capacity(sum_node->children.size());
 
             for (auto const& child : sum_node->children) {
-                if (auto child_as_node = convert_to_calculation_node(child)) {
+                if (auto child_as_node = convert_to_calculation_node(child, context)) {
                     children.append(child_as_node.release_nonnull());
                 } else {
                     return nullptr;
@@ -9165,24 +9282,24 @@ OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node co
 
             return SumCalculationNode::create(move(children));
         },
-        [this](NonnullOwnPtr<CalcParsing::InvertNode> const& invert_node) -> OwnPtr<CalculationNode> {
-            if (auto child_as_node = convert_to_calculation_node(invert_node->child))
+        [this, &context](NonnullOwnPtr<CalcParsing::InvertNode> const& invert_node) -> OwnPtr<CalculationNode> {
+            if (auto child_as_node = convert_to_calculation_node(invert_node->child, context))
                 return InvertCalculationNode::create(child_as_node.release_nonnull());
             return nullptr;
         },
-        [this](NonnullOwnPtr<CalcParsing::NegateNode> const& negate_node) -> OwnPtr<CalculationNode> {
-            if (auto child_as_node = convert_to_calculation_node(negate_node->child))
+        [this, &context](NonnullOwnPtr<CalcParsing::NegateNode> const& negate_node) -> OwnPtr<CalculationNode> {
+            if (auto child_as_node = convert_to_calculation_node(negate_node->child, context))
                 return NegateCalculationNode::create(child_as_node.release_nonnull());
             return nullptr;
         },
-        [this](NonnullRawPtr<ComponentValue const> const& component_value) -> OwnPtr<CalculationNode> {
+        [this, &context](NonnullRawPtr<ComponentValue const> const& component_value) -> OwnPtr<CalculationNode> {
             // NOTE: This is the "process the leaf nodes" part of step 5 of https://drafts.csswg.org/css-values-4/#parse-a-calculation
             //       We divert a little from the spec: Rather than modify an existing tree of values, we construct a new one from that source tree.
             //       This lets us make CalculationNodes immutable.
 
             // 1. If leaf is a parenthesized simple block, replace leaf with the result of parsing a calculation from leaf’s contents.
             if (component_value->is_block() && component_value->block().is_paren()) {
-                auto leaf_calculation = parse_a_calculation(component_value->block().value);
+                auto leaf_calculation = parse_a_calculation(component_value->block().value, context);
                 if (!leaf_calculation)
                     return nullptr;
 
@@ -9193,7 +9310,7 @@ OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node co
             // NOTE: All function tokens at this point should be math functions.
             if (component_value->is_function()) {
                 auto const& function = component_value->function();
-                auto leaf_calculation = parse_a_calc_function_node(function);
+                auto leaf_calculation = parse_a_calc_function_node(function, context);
                 if (!leaf_calculation)
                     return nullptr;
 
@@ -9210,17 +9327,17 @@ OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node co
             }
 
             if (component_value->is(Token::Type::Number))
-                return NumericCalculationNode::create(component_value->token().number());
+                return NumericCalculationNode::create(component_value->token().number(), context);
 
             if (component_value->is(Token::Type::Dimension)) {
                 auto numeric_value = component_value->token().dimension_value();
                 auto unit_string = component_value->token().dimension_unit();
 
                 if (auto length_type = Length::unit_from_name(unit_string); length_type.has_value())
-                    return NumericCalculationNode::create(Length { numeric_value, length_type.release_value() });
+                    return NumericCalculationNode::create(Length { numeric_value, length_type.release_value() }, context);
 
                 if (auto angle_type = Angle::unit_from_name(unit_string); angle_type.has_value())
-                    return NumericCalculationNode::create(Angle { numeric_value, angle_type.release_value() });
+                    return NumericCalculationNode::create(Angle { numeric_value, angle_type.release_value() }, context);
 
                 if (auto flex_type = Flex::unit_from_name(unit_string); flex_type.has_value()) {
                     // https://www.w3.org/TR/css3-grid-layout/#fr-unit
@@ -9232,23 +9349,20 @@ OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node co
                 }
 
                 if (auto frequency_type = Frequency::unit_from_name(unit_string); frequency_type.has_value())
-                    return NumericCalculationNode::create(Frequency { numeric_value, frequency_type.release_value() });
+                    return NumericCalculationNode::create(Frequency { numeric_value, frequency_type.release_value() }, context);
 
                 if (auto resolution_type = Resolution::unit_from_name(unit_string); resolution_type.has_value())
-                    return NumericCalculationNode::create(Resolution { numeric_value, resolution_type.release_value() });
+                    return NumericCalculationNode::create(Resolution { numeric_value, resolution_type.release_value() }, context);
 
                 if (auto time_type = Time::unit_from_name(unit_string); time_type.has_value())
-                    return NumericCalculationNode::create(Time { numeric_value, time_type.release_value() });
+                    return NumericCalculationNode::create(Time { numeric_value, time_type.release_value() }, context);
 
                 dbgln_if(CSS_PARSER_DEBUG, "Unrecognized dimension type in calc() expression: {}", component_value->to_string());
                 return nullptr;
             }
 
-            if (component_value->is(Token::Type::Percentage)) {
-                // FIXME: Figure this out in non-property contexts
-                auto percentage_resolved_type = property_resolves_percentages_relative_to(m_context.current_property_id());
-                return NumericCalculationNode::create(Percentage { component_value->token().percentage() }, percentage_resolved_type);
-            }
+            if (component_value->is(Token::Type::Percentage))
+                return NumericCalculationNode::create(Percentage { component_value->token().percentage() }, context);
 
             // NOTE: If we get here, then we have a ComponentValue that didn't get replaced with something else,
             //       so the calc() is invalid.
@@ -9262,7 +9376,7 @@ OwnPtr<CalculationNode> Parser::convert_to_calculation_node(CalcParsing::Node co
 }
 
 // https://drafts.csswg.org/css-values-4/#parse-a-calculation
-OwnPtr<CalculationNode> Parser::parse_a_calculation(Vector<ComponentValue> const& original_values)
+OwnPtr<CalculationNode> Parser::parse_a_calculation(Vector<ComponentValue> const& original_values, CalculationContext const& context)
 {
     // 1. Discard any <whitespace-token>s from values.
     // 2. An item in values is an “operator” if it’s a <delim-token> with the value "+", "-", "*", or "/". Otherwise, it’s a “value”.
@@ -9375,7 +9489,7 @@ OwnPtr<CalculationNode> Parser::parse_a_calculation(Vector<ComponentValue> const
 
     // 5. At this point values is a tree of Sum, Product, Negate, and Invert nodes, with other types of values at the leaf nodes. Process the leaf nodes.
     // NOTE: We process leaf nodes as part of this conversion.
-    auto calculation_tree = convert_to_calculation_node(*single_value);
+    auto calculation_tree = convert_to_calculation_node(*single_value, context);
     if (!calculation_tree)
         return nullptr;
 

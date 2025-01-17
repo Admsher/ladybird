@@ -166,7 +166,7 @@ bool fire_a_version_change_event(JS::Realm& realm, FlyString const& event_name, 
 }
 
 // https://w3c.github.io/IndexedDB/#convert-value-to-key
-ErrorOr<Key> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<JS::Value> seen)
+ErrorOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<JS::Value> seen)
 {
     // 1. If seen was not given, then let seen be a new empty set.
     // NOTE: This is handled by the caller.
@@ -185,7 +185,7 @@ ErrorOr<Key> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<
             return Error::from_string_literal("NaN key");
 
         // 2. Otherwise, return a new key with type number and value input.
-        return Key::create_number(input.as_double());
+        return Key::create_number(realm, input.as_double());
     }
 
     // - If input is a Date (has a [[DateValue]] internal slot)
@@ -200,14 +200,14 @@ ErrorOr<Key> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<
             return Error::from_string_literal("NaN key");
 
         // 3. Otherwise, return a new key with type date and value ms.
-        return Key::create_date(ms);
+        return Key::create_date(realm, ms);
     }
 
     // - If Type(input) is String
     if (input.is_string()) {
 
         // 1. Return a new key with type string and value input.
-        return Key::create_string(input.as_string().utf8_string());
+        return Key::create_string(realm, input.as_string().utf8_string());
     }
 
     // - If input is a buffer source type
@@ -217,7 +217,7 @@ ErrorOr<Key> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<
         auto data_buffer = TRY(WebIDL::get_buffer_source_copy(input.as_object()));
 
         // 2. Return a new key with type binary and value bytes.
-        return Key::create_binary(data_buffer);
+        return Key::create_binary(realm, data_buffer);
     }
 
     // - If input is an Array exotic object
@@ -234,7 +234,7 @@ ErrorOr<Key> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<
         seen.append(input);
 
         // 3. Let keys be a new empty list.
-        Vector<Key> keys;
+        Vector<GC::Root<Key>> keys;
 
         // 4. Let index be 0.
         u64 index = 0;
@@ -275,7 +275,7 @@ ErrorOr<Key> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<
         }
 
         // 6. Return a new array key with value keys.
-        return Key::create_array(keys);
+        return Key::create_array(realm, keys);
     }
 
     // - Otherwise
@@ -493,6 +493,91 @@ void abort_a_transaction(IDBTransaction& transaction, GC::Ptr<WebIDL::DOMExcepti
             request->set_done(false);
         }
     }));
+}
+
+// https://w3c.github.io/IndexedDB/#convert-a-key-to-a-value
+JS::Value convert_a_key_to_a_value(JS::Realm& realm, GC::Ref<Key> key)
+{
+    // 1. Let type be key’s type.
+    auto type = key->type();
+
+    // 2. Let value be key’s value.
+    auto value = key->value();
+
+    // 3. Switch on type:
+    switch (type) {
+    case Key::KeyType::Number: {
+        // Return an ECMAScript Number value equal to value
+        return JS::Value(key->value_as_double());
+    }
+
+    case Key::KeyType::String: {
+        // Return an ECMAScript String value equal to value
+        return JS::PrimitiveString::create(realm.vm(), key->value_as_string());
+    }
+
+    case Key::KeyType::Date: {
+        // 1. Let date be the result of executing the ECMAScript Date constructor with the single argument value.
+        auto date = JS::Date::create(realm, key->value_as_double());
+
+        // 2. Assert: date is not an abrupt completion.
+        // NOTE: This is not possible in our implementation.
+
+        // 3. Return date.
+        return date;
+    }
+
+    case Key::KeyType::Binary: {
+        auto buffer = key->value_as_byte_buffer();
+
+        // 1. Let len be value’s length.
+        auto len = buffer.size();
+
+        // 2. Let buffer be the result of executing the ECMAScript ArrayBuffer constructor with len.
+        // 3. Assert: buffer is not an abrupt completion.
+        auto array_buffer = MUST(JS::ArrayBuffer::create(realm, len));
+
+        // 4. Set the entries in buffer’s [[ArrayBufferData]] internal slot to the entries in value.
+        buffer.span().copy_to(array_buffer->buffer());
+
+        // 5. Return buffer.
+        return array_buffer;
+    }
+
+    case Key::KeyType::Array: {
+        auto data = key->value_as_vector();
+
+        // 1. Let array be the result of executing the ECMAScript Array constructor with no arguments.
+        // 2. Assert: array is not an abrupt completion.
+        auto array = MUST(JS::Array::create(realm, 0));
+
+        // 3. Let len be value’s size.
+        auto len = data.size();
+
+        // 4. Let index be 0.
+        u64 index = 0;
+
+        // 5. While index is less than len:
+        while (index < len) {
+            // 1. Let entry be the result of converting a key to a value with value[index].
+            auto entry = convert_a_key_to_a_value(realm, *data[index]);
+
+            // 2. Let status be CreateDataProperty(array, index, entry).
+            auto status = MUST(array->create_data_property(index, entry));
+
+            // 3. Assert: status is true.
+            VERIFY(status);
+
+            // 4. Increase index by 1.
+            index++;
+        }
+
+        // 6. Return array.
+        return array;
+    }
+    }
+
+    VERIFY_NOT_REACHED();
 }
 
 }

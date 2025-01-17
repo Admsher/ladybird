@@ -160,12 +160,13 @@ public:
     Optional<CSS::UnicodeBidi> unicode_bidi() const;
     Optional<CSS::WritingMode> writing_mode() const;
     Optional<CSS::UserSelect> user_select() const;
+    Optional<CSS::Isolation> isolation() const;
 
     static Vector<CSS::Transformation> transformations_for_style_value(CSSStyleValue const& value);
     Vector<CSS::Transformation> transformations() const;
     Optional<CSS::TransformBox> transform_box() const;
     CSS::TransformOrigin transform_origin() const;
-    Optional<CSS::Transformation> rotate(Layout::Node const&) const;
+    Optional<CSS::Transformation> rotate() const;
     Optional<CSS::Transformation> translate() const;
     Optional<CSS::Transformation> scale() const;
 

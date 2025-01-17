@@ -206,8 +206,6 @@ class RectStyleValue;
 class Resolution;
 class ResolutionOrCalculated;
 class ResolutionStyleValue;
-class RotationStyleValue;
-class ScaleStyleValue;
 class Screen;
 class ScreenOrientation;
 class ScrollbarGutterStyleValue;
@@ -230,7 +228,6 @@ class TimeStyleValue;
 class Transformation;
 class TransformationStyleValue;
 class TransitionStyleValue;
-class TranslationStyleValue;
 class UnresolvedStyleValue;
 class URLStyleValue;
 class VisualViewport;
@@ -552,6 +549,7 @@ enum class AllowMultipleFiles;
 enum class MediaSeekMode;
 enum class SandboxingFlagSet;
 
+struct Agent;
 struct EmbedderPolicy;
 struct Environment;
 struct EnvironmentSettingsObject;
@@ -585,6 +583,7 @@ class IDBOpenDBRequest;
 class IDBRequest;
 class IDBTransaction;
 class IDBVersionChangeEvent;
+class RequestList;
 }
 
 namespace Web::Internals {

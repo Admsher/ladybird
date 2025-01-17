@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2024, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2021-2024, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -30,14 +30,11 @@
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RectStyleValue.h>
-#include <LibWeb/CSS/StyleValues/RotationStyleValue.h>
-#include <LibWeb/CSS/StyleValues/ScaleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ScrollbarGutterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ShadowStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
-#include <LibWeb/CSS/StyleValues/TranslationStyleValue.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Platform/FontPlugin.h>
@@ -536,7 +533,7 @@ Optional<CSS::JustifySelf> ComputedProperties::justify_self() const
     return keyword_to_justify_self(value.to_keyword());
 }
 
-Vector<CSS::Transformation> ComputedProperties::transformations_for_style_value(CSSStyleValue const& value)
+Vector<Transformation> ComputedProperties::transformations_for_style_value(CSSStyleValue const& value)
 {
     if (value.is_keyword() && value.to_keyword() == CSS::Keyword::None)
         return {};
@@ -546,53 +543,11 @@ Vector<CSS::Transformation> ComputedProperties::transformations_for_style_value(
 
     auto& list = value.as_value_list();
 
-    Vector<CSS::Transformation> transformations;
-
+    Vector<Transformation> transformations;
     for (auto& it : list.values()) {
         if (!it->is_transformation())
             return {};
-        auto& transformation_style_value = it->as_transformation();
-        auto function = transformation_style_value.transform_function();
-        auto function_metadata = transform_function_metadata(function);
-        Vector<TransformValue> values;
-        size_t argument_index = 0;
-        for (auto& transformation_value : transformation_style_value.values()) {
-            if (transformation_value->is_calculated()) {
-                auto& calculated = transformation_value->as_calculated();
-                if (calculated.resolves_to_length_percentage()) {
-                    values.append(CSS::LengthPercentage { calculated });
-                } else if (calculated.resolves_to_percentage()) {
-                    // FIXME: Maybe transform this for loop to always check the metadata for the correct types
-                    if (function_metadata.parameters[argument_index].type == TransformFunctionParameterType::NumberPercentage) {
-                        values.append(NumberPercentage { calculated.resolve_percentage().value() });
-                    } else {
-                        values.append(LengthPercentage { calculated.resolve_percentage().value() });
-                    }
-                } else if (calculated.resolves_to_number()) {
-                    values.append({ Number(Number::Type::Number, calculated.resolve_number().value()) });
-                } else if (calculated.resolves_to_angle()) {
-                    values.append({ calculated.resolve_angle().value() });
-                } else {
-                    dbgln("FIXME: Unsupported calc value in transform! {}", calculated.to_string(CSSStyleValue::SerializationMode::Normal));
-                }
-            } else if (transformation_value->is_length()) {
-                values.append({ transformation_value->as_length().length() });
-            } else if (transformation_value->is_percentage()) {
-                if (function_metadata.parameters[argument_index].type == TransformFunctionParameterType::NumberPercentage) {
-                    values.append(NumberPercentage { transformation_value->as_percentage().percentage() });
-                } else {
-                    values.append(LengthPercentage { transformation_value->as_percentage().percentage() });
-                }
-            } else if (transformation_value->is_number()) {
-                values.append({ Number(Number::Type::Number, transformation_value->as_number().number()) });
-            } else if (transformation_value->is_angle()) {
-                values.append({ transformation_value->as_angle().angle() });
-            } else {
-                dbgln("FIXME: Unsupported value in transform! {}", transformation_value->to_string(CSSStyleValue::SerializationMode::Normal));
-            }
-            argument_index++;
-        }
-        transformations.empend(function, move(values));
+        transformations.append(it->as_transformation().to_transformation());
     }
     return transformations;
 }
@@ -602,69 +557,28 @@ Vector<CSS::Transformation> ComputedProperties::transformations() const
     return transformations_for_style_value(property(CSS::PropertyID::Transform));
 }
 
-Optional<CSS::Transformation> ComputedProperties::rotate(Layout::Node const& layout_node) const
+Optional<Transformation> ComputedProperties::rotate() const
 {
-    auto const& value = property(CSS::PropertyID::Rotate);
-    if (!value.is_rotation())
+    auto const& value = property(PropertyID::Rotate);
+    if (!value.is_transformation())
         return {};
-    auto& rotation = value.as_rotation();
-
-    auto resolve_angle = [&layout_node](CSSStyleValue const& value) -> Optional<Angle> {
-        if (value.is_angle())
-            return value.as_angle().angle();
-        if (value.is_calculated() && value.as_calculated().resolves_to_angle())
-            return value.as_calculated().resolve_angle(layout_node);
-        return {};
-    };
-
-    auto resolve_number = [&](CSSStyleValue const& value) -> Optional<double> {
-        if (value.is_number())
-            return value.as_number().number();
-        if (value.is_calculated() && value.as_calculated().resolves_to_number())
-            return value.as_calculated().resolve_number();
-        return {};
-    };
-
-    auto x = resolve_number(rotation.rotation_x()).value_or(0);
-    auto y = resolve_number(rotation.rotation_y()).value_or(0);
-    auto z = resolve_number(rotation.rotation_z()).value_or(0);
-    auto angle = resolve_angle(rotation.angle()).value_or(Angle::make_degrees(0));
-
-    Vector<TransformValue> values;
-    values.append({ Number(Number::Type::Number, x) });
-    values.append({ Number(Number::Type::Number, y) });
-    values.append({ Number(Number::Type::Number, z) });
-    values.append({ angle });
-
-    return CSS::Transformation(CSS::TransformFunction::Rotate3d, move(values));
+    return value.as_transformation().to_transformation();
 }
 
-Optional<CSS::Transformation> ComputedProperties::translate() const
+Optional<Transformation> ComputedProperties::translate() const
 {
-    auto const& value = property(CSS::PropertyID::Translate);
-    if (!value.is_translation())
+    auto const& value = property(PropertyID::Translate);
+    if (!value.is_transformation())
         return {};
-    auto const& translation = value.as_translation();
-
-    Vector<TransformValue> values;
-    values.append(translation.x());
-    values.append(translation.y());
-
-    return CSS::Transformation(CSS::TransformFunction::Translate, move(values));
+    return value.as_transformation().to_transformation();
 }
 
-Optional<CSS::Transformation> ComputedProperties::scale() const
+Optional<Transformation> ComputedProperties::scale() const
 {
-    auto const& value = property(CSS::PropertyID::Scale);
-    if (!value.is_scale())
+    auto const& value = property(PropertyID::Scale);
+    if (!value.is_transformation())
         return {};
-    auto const& scale = value.as_scale();
-
-    Vector<TransformValue> values;
-    values.append(scale.x());
-    values.append(scale.y());
-
-    return CSS::Transformation(CSS::TransformFunction::Scale, move(values));
+    return value.as_transformation().to_transformation();
 }
 
 static Optional<LengthPercentage> length_percentage_for_style_value(CSSStyleValue const& value)
@@ -1438,6 +1352,12 @@ Optional<CSS::UserSelect> ComputedProperties::user_select() const
 {
     auto const& value = property(CSS::PropertyID::UserSelect);
     return keyword_to_user_select(value.to_keyword());
+}
+
+Optional<CSS::Isolation> ComputedProperties::isolation() const
+{
+    auto const& value = property(CSS::PropertyID::Isolation);
+    return keyword_to_isolation(value.to_keyword());
 }
 
 Optional<CSS::MaskType> ComputedProperties::mask_type() const

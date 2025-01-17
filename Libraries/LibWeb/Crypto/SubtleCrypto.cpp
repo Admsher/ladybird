@@ -1072,18 +1072,18 @@ SupportedAlgorithmsMap const& supported_algorithms()
     // https://w3c.github.io/webcrypto/#algorithm-conventions
 
     // https://w3c.github.io/webcrypto/#rsassa-pkcs1-registration
-    // FIXME: define_an_algorithm<RSAESPKCS1>("sign"_string, "RSAES-PKCS1-v1_5"_string);
-    // FIXME: define_an_algorithm<RSAESPKCS1>("verify"_string, "RSAES-PKCS1-v1_5"_string);
-    // FIXME: define_an_algorithm<RSAESPKCS1, RsaHashedKeyGenParams>("generateKey"_string, "RSASSA-PKCS1-v1_5"_string);
-    // FIXME: define_an_algorithm<RSAESPKCS1, RsaHashedImportParams>("importKey"_string, "RSASSA-PKCS1-v1_5"_string);
-    // FIXME: define_an_algorithm<RSAESPKCS1>("exportKey"_string, "RSASSA-PKCS1-v1_5"_string);
+    define_an_algorithm<RSASSAPKCS1>("sign"_string, "RSASSA-PKCS1-v1_5"_string);
+    define_an_algorithm<RSASSAPKCS1>("verify"_string, "RSASSA-PKCS1-v1_5"_string);
+    define_an_algorithm<RSASSAPKCS1, RsaHashedKeyGenParams>("generateKey"_string, "RSASSA-PKCS1-v1_5"_string);
+    define_an_algorithm<RSASSAPKCS1, RsaHashedImportParams>("importKey"_string, "RSASSA-PKCS1-v1_5"_string);
+    define_an_algorithm<RSASSAPKCS1>("exportKey"_string, "RSASSA-PKCS1-v1_5"_string);
 
     // https://w3c.github.io/webcrypto/#rsa-pss-registration
-    // FIXME: define_an_algorithm<RSAPSS>("sign"_string, "RSA-PSS"_string);
-    // FIXME: define_an_algorithm<RSAPSS>("verify"_string, "RSA-PSS"_string);
-    // FIXME: define_an_algorithm<RSAPSS, RsaHashedKeyGenParams>("generateKey"_string, "RSA-PSS"_string);
-    // FIXME: define_an_algorithm<RSAPSS, RsaHashedImportParams>("importKey"_string, "RSA-PSS"_string);
-    // FIXME: define_an_algorithm<RSAPSS>("exportKey"_string, "RSA-PSS"_string);
+    define_an_algorithm<RSAPSS, RsaPssParams>("sign"_string, "RSA-PSS"_string);
+    define_an_algorithm<RSAPSS, RsaPssParams>("verify"_string, "RSA-PSS"_string);
+    define_an_algorithm<RSAPSS, RsaHashedKeyGenParams>("generateKey"_string, "RSA-PSS"_string);
+    define_an_algorithm<RSAPSS, RsaHashedImportParams>("importKey"_string, "RSA-PSS"_string);
+    define_an_algorithm<RSAPSS>("exportKey"_string, "RSA-PSS"_string);
 
     // https://w3c.github.io/webcrypto/#rsa-oaep-registration
     define_an_algorithm<RSAOAEP, RsaOaepParams>("encrypt"_string, "RSA-OAEP"_string);
@@ -1181,11 +1181,11 @@ SupportedAlgorithmsMap const& supported_algorithms()
     define_an_algorithm<ED25519>("exportKey"_string, "Ed25519"_string);
 
     // https://wicg.github.io/webcrypto-secure-curves/#ed448-registration
-    // FIXME: define_an_algorithm<ED448, Ed448Params>("sign"_string, "Ed448"_string);
-    // FIXME: define_an_algorithm<ED448, Ed448Params>("verify"_string, "Ed448"_string);
-    // FIXME: define_an_algorithm<ED448>("generateKey"_string, "Ed448"_string);
-    // FIXME: define_an_algorithm<ED448>("importKey"_string, "Ed448"_string);
-    // FIXME: define_an_algorithm<ED448>("exportKey"_string, "Ed448"_string);
+    define_an_algorithm<ED448, Ed448Params>("sign"_string, "Ed448"_string);
+    define_an_algorithm<ED448, Ed448Params>("verify"_string, "Ed448"_string);
+    define_an_algorithm<ED448>("generateKey"_string, "Ed448"_string);
+    define_an_algorithm<ED448>("importKey"_string, "Ed448"_string);
+    define_an_algorithm<ED448>("exportKey"_string, "Ed448"_string);
 
     return internal_object;
 }

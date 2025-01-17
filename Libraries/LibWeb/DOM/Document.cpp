@@ -4,6 +4,7 @@
  * Copyright (c) 2021-2023, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2021-2024, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2024, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -117,6 +118,7 @@
 #include <LibWeb/HTML/Numbers.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/PopStateEvent.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
@@ -661,6 +663,15 @@ WebIDL::ExceptionOr<Document*> Document::open(Optional<String> const&, Optional<
 
     // 11. Replace all with null within document, without firing any mutation events.
     replace_all(nullptr);
+
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    // When document.open() is called and a document's singleton objects are all replaced by new instances of those
+    // objects, editing state associated with that document (including the CSS styling flag, default single-line
+    // container name, and any state overrides or value overrides) must be reset.
+    set_css_styling_flag(false);
+    set_default_single_line_container_name(HTML::TagNames::div);
+    reset_command_state_overrides();
+    reset_command_value_overrides();
 
     // 12. If document is fully active, then:
     if (is_fully_active()) {
@@ -1490,7 +1501,7 @@ void Document::obtain_theme_color()
             auto media = element.attribute(HTML::AttributeNames::media);
             if (media.has_value()) {
                 auto query = parse_media_query(context, media.value());
-                if (window() && !query->evaluate(*window()))
+                if (query.is_null() || !window() || !query->evaluate(*window()))
                     return TraversalDecision::Continue;
             }
 
@@ -1501,9 +1512,9 @@ void Document::obtain_theme_color()
             auto css_value = parse_css_value(context, value, CSS::PropertyID::Color);
 
             // 4. If color is not failure, then return color.
-            if (!css_value.is_null() && css_value->is_color()) {
+            if (!css_value.is_null() && css_value->has_color()) {
                 Optional<Layout::NodeWithStyle const&> root_node;
-                if (html_element())
+                if (html_element() && html_element()->layout_node())
                     root_node = *html_element()->layout_node();
 
                 theme_color = css_value->to_color(root_node);
@@ -3336,13 +3347,13 @@ WebIDL::ExceptionOr<Document::PrefixAndTagName> Document::validate_qualified_nam
 // https://dom.spec.whatwg.org/#dom-document-createnodeiterator
 GC::Ref<NodeIterator> Document::create_node_iterator(Node& root, unsigned what_to_show, GC::Ptr<NodeFilter> filter)
 {
-    return NodeIterator::create(root, what_to_show, filter).release_value_but_fixme_should_propagate_errors();
+    return NodeIterator::create(realm(), root, what_to_show, filter);
 }
 
 // https://dom.spec.whatwg.org/#dom-document-createtreewalker
 GC::Ref<TreeWalker> Document::create_tree_walker(Node& root, unsigned what_to_show, GC::Ptr<NodeFilter> filter)
 {
-    return TreeWalker::create(root, what_to_show, filter);
+    return TreeWalker::create(realm(), root, what_to_show, filter);
 }
 
 void Document::register_node_iterator(Badge<NodeIterator>, NodeIterator& node_iterator)
@@ -3776,8 +3787,8 @@ void Document::destroy()
 
     // Not in the spec:
     for (auto& navigable_container : HTML::NavigableContainer::all_instances()) {
-        if (&navigable_container->document() == this)
-            HTML::all_navigables().remove(navigable_container->content_navigable());
+        if (&navigable_container->document() == this && navigable_container->content_navigable())
+            HTML::all_navigables().remove(*navigable_container->content_navigable());
     }
 
     // 9. Set document's node navigable's active session history entry's document state's document to null.
@@ -3939,7 +3950,7 @@ void Document::unload(GC::Ptr<Document>)
     auto intend_to_store_in_bfcache = false;
 
     // 6. Let eventLoop be oldDocument's relevant agent's event loop.
-    auto& event_loop = *verify_cast<Bindings::WebEngineCustomData>(*HTML::relevant_agent(*this).custom_data()).event_loop;
+    auto& event_loop = *HTML::relevant_agent(*this).event_loop;
 
     // 7. Increase eventLoop's termination nesting level by 1.
     event_loop.increment_termination_nesting_level();
@@ -4532,15 +4543,10 @@ void Document::start_intersection_observing_a_lazy_loading_element(Element& elem
                 }
 
                 // 4. Stop intersection-observing a lazy loading element for entry.target.
-                // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#stop-intersection-observing-a-lazy-loading-element
-                // 1. Let doc be element's node document.
-                // NOTE: It's `this`.
+                stop_intersection_observing_a_lazy_loading_element(entry.target());
 
-                // 2. Assert: doc's lazy load intersection observer is not null.
-                VERIFY(m_lazy_load_intersection_observer);
-
-                // 3. Call doc's lazy load intersection observer unobserve method with element as the argument.
-                m_lazy_load_intersection_observer->unobserve(entry.target());
+                // 5. Set entry.target's lazy load resumption steps to null.
+                entry.target()->take_lazy_load_resumption_steps({});
 
                 // 6. Invoke resumptionSteps.
                 resumption_steps->function()();
@@ -4560,6 +4566,19 @@ void Document::start_intersection_observing_a_lazy_loading_element(Element& elem
     // 3. Call doc's lazy load intersection observer's observe method with element as the argument.
     VERIFY(m_lazy_load_intersection_observer);
     m_lazy_load_intersection_observer->observe(element);
+}
+
+// https://html.spec.whatwg.org/multipage/urls-and-fetching.html#stop-intersection-observing-a-lazy-loading-element
+void Document::stop_intersection_observing_a_lazy_loading_element(Element& element)
+{
+    // 1. Let doc be element's node document.
+    // NOTE: It's `this`.
+
+    // 2. Assert: doc's lazy load intersection observer is not null.
+    VERIFY(m_lazy_load_intersection_observer);
+
+    // 3. Call doc's lazy load intersection observer unobserve method with element as the argument.
+    m_lazy_load_intersection_observer->unobserve(element);
 }
 
 // https://html.spec.whatwg.org/multipage/semantics.html#shared-declarative-refresh-steps
@@ -6078,7 +6097,7 @@ Document::StepsToFireBeforeunloadResult Document::steps_to_fire_beforeunload(boo
     m_unload_counter++;
 
     // 3. Increase document's relevant agent's event loop's termination nesting level by 1.
-    auto& event_loop = *verify_cast<Bindings::WebEngineCustomData>(*HTML::relevant_agent(*this).custom_data()).event_loop;
+    auto& event_loop = *HTML::relevant_agent(*this).event_loop;
     event_loop.increment_termination_nesting_level();
 
     // 4. Let eventFiringResult be the result of firing an event named beforeunload at document's relevant global object,

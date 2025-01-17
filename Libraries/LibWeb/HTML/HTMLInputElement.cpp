@@ -2,7 +2,7 @@
  * Copyright (c) 2018-2023, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2022, Adam Hodgen <ant1441@gmail.com>
  * Copyright (c) 2022, Andrew Kaster <akaster@serenityos.org>
- * Copyright (c) 2023-2024, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2023-2025, Shannon Booth <shannon@serenityos.org>
  * Copyright (c) 2023, Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
  * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
  * Copyright (c) 2024, Fernando Kiotheka <fer@k6a.dev>
@@ -158,15 +158,13 @@ void HTMLInputElement::adjust_computed_style(CSS::ComputedProperties& style)
         style.set_property(CSS::PropertyID::LineHeight, CSS::CSSKeywordValue::create(CSS::Keyword::Normal));
 }
 
-void HTMLInputElement::set_checked(bool checked, ChangeSource change_source)
+void HTMLInputElement::set_checked(bool checked)
 {
-    if (m_checked == checked)
-        return;
-
     // The dirty checkedness flag must be initially set to false when the element is created,
     // and must be set to true whenever the user interacts with the control in a way that changes the checkedness.
-    if (change_source == ChangeSource::User)
-        m_dirty_checkedness = true;
+    m_dirty_checkedness = true;
+    if (m_checked == checked)
+        return;
 
     m_checked = checked;
 
@@ -181,9 +179,9 @@ void HTMLInputElement::set_checked_binding(bool checked)
         if (checked)
             set_checked_within_group();
         else
-            set_checked(false, ChangeSource::Programmatic);
+            set_checked(false);
     } else {
-        set_checked(checked, ChangeSource::Programmatic);
+        set_checked(checked);
     }
 }
 
@@ -723,10 +721,27 @@ static bool is_allowed_to_be_readonly(HTML::HTMLInputElement::TypeAttributeState
     }
 }
 
+// https://html.spec.whatwg.org/multipage/input.html#the-input-element:attr-input-maxlength-3
+static bool is_applicable_for_maxlength_attribute(HTML::HTMLInputElement::TypeAttributeState state)
+{
+    switch (state) {
+    case HTML::HTMLInputElement::TypeAttributeState::Text:
+    case HTML::HTMLInputElement::TypeAttributeState::Search:
+    case HTML::HTMLInputElement::TypeAttributeState::Telephone:
+    case HTML::HTMLInputElement::TypeAttributeState::URL:
+    case HTML::HTMLInputElement::TypeAttributeState::Email:
+    case HTML::HTMLInputElement::TypeAttributeState::Password:
+        return true;
+    default:
+        return false;
+    }
+}
+
 // https://html.spec.whatwg.org/multipage/input.html#attr-input-maxlength
 void HTMLInputElement::handle_maxlength_attribute()
 {
-    if (m_text_node) {
+    // The maxlength attribute, when it applies, is a form control maxlength attribute.
+    if (m_text_node && is_applicable_for_maxlength_attribute(type_state())) {
         auto max_length = this->max_length();
         if (max_length >= 0) {
             m_text_node->set_max_length(max_length);
@@ -1249,16 +1264,13 @@ void HTMLInputElement::did_lose_focus()
 void HTMLInputElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value, Optional<FlyString> const&)
 {
     if (name == HTML::AttributeNames::checked) {
-        if (!value.has_value()) {
-            // When the checked content attribute is removed, if the control does not have dirty checkedness,
-            // the user agent must set the checkedness of the element to false.
-            if (!m_dirty_checkedness)
-                set_checked(false, ChangeSource::Programmatic);
-        } else {
-            // When the checked content attribute is added, if the control does not have dirty checkedness,
-            // the user agent must set the checkedness of the element to true
-            if (!m_dirty_checkedness)
-                set_checked(true, ChangeSource::Programmatic);
+        // https://html.spec.whatwg.org/multipage/input.html#the-input-element:concept-input-checked-dirty-2
+        // When the checked content attribute is added, if the control does not have dirty checkedness, the user agent must set the checkedness of the element to true;
+        // when the checked content attribute is removed, if the control does not have dirty checkedness, the user agent must set the checkedness of the element to false.
+        if (!m_dirty_checkedness) {
+            set_checked(value.has_value());
+            // set_checked() sets the dirty checkedness flag. We reset it here sinceit shouldn't be set when updating the attribute value
+            m_dirty_checkedness = false;
         }
     } else if (name == HTML::AttributeNames::type) {
         auto new_type_attribute_state = parse_type_attribute(value.value_or(String {}));
@@ -1711,7 +1723,7 @@ void HTMLInputElement::apply_presentational_hints(GC::Ref<CSS::CascadedPropertie
 }
 
 // https://html.spec.whatwg.org/multipage/input.html#the-input-element%3Aconcept-node-clone-ext
-WebIDL::ExceptionOr<void> HTMLInputElement::cloned(DOM::Node& copy, bool subtree)
+WebIDL::ExceptionOr<void> HTMLInputElement::cloned(DOM::Node& copy, bool subtree) const
 {
     TRY(Base::cloned(copy, subtree));
 
@@ -1721,6 +1733,10 @@ WebIDL::ExceptionOr<void> HTMLInputElement::cloned(DOM::Node& copy, bool subtree
     input_clone.m_dirty_value = m_dirty_value;
     input_clone.m_checked = m_checked;
     input_clone.m_dirty_checkedness = m_dirty_checkedness;
+
+    // AD-HOC: The spec doesn't mention propagating this state, but there is a WPT test that expects cloned nodes to preserve it.
+    input_clone.m_indeterminate = m_indeterminate;
+
     return {};
 }
 
@@ -1753,7 +1769,7 @@ void HTMLInputElement::set_checked_within_group()
     if (checked())
         return;
 
-    set_checked(true, ChangeSource::User);
+    set_checked(true);
 
     // No point iterating the tree if we have an empty name.
     if (!name().has_value() || name()->is_empty())
@@ -1761,7 +1777,7 @@ void HTMLInputElement::set_checked_within_group()
 
     root().for_each_in_inclusive_subtree_of_type<HTML::HTMLInputElement>([&](auto& element) {
         if (element.checked() && &element != this && is_in_same_radio_button_group(*this, element))
-            element.set_checked(false, ChangeSource::User);
+            element.set_checked(false);
         return TraversalDecision::Continue;
     });
 }
@@ -1777,7 +1793,7 @@ void HTMLInputElement::legacy_pre_activation_behavior()
     // false, false if it is true) and set this element's indeterminate IDL
     // attribute to false.
     if (type_state() == TypeAttributeState::Checkbox) {
-        set_checked(!checked(), ChangeSource::User);
+        set_checked(!checked());
         set_indeterminate(false);
     }
 
@@ -1805,7 +1821,7 @@ void HTMLInputElement::legacy_cancelled_activation_behavior()
     // element's checkedness and the element's indeterminate IDL attribute back
     // to the values they had before the legacy-pre-activation behavior was run.
     if (type_state() == TypeAttributeState::Checkbox) {
-        set_checked(m_before_legacy_pre_activation_behavior_checked, ChangeSource::Programmatic);
+        set_checked(m_before_legacy_pre_activation_behavior_checked);
         set_indeterminate(m_before_legacy_pre_activation_behavior_indeterminate);
     }
 
@@ -1830,7 +1846,7 @@ void HTMLInputElement::legacy_cancelled_activation_behavior()
         }
 
         if (!did_reselect_previous_element)
-            set_checked(false, ChangeSource::User);
+            set_checked(false);
     }
 }
 

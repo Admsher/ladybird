@@ -1,14 +1,18 @@
 /*
- * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2024-2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGfx/Color.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/ResolvedCSSStyleDeclaration.h>
+#include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
+#include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/CharacterData.h>
 #include <LibWeb/DOM/DocumentFragment.h>
 #include <LibWeb/DOM/DocumentType.h>
@@ -20,10 +24,13 @@
 #include <LibWeb/Editing/Internal/Algorithms.h>
 #include <LibWeb/HTML/HTMLAnchorElement.h>
 #include <LibWeb/HTML/HTMLBRElement.h>
+#include <LibWeb/HTML/HTMLDivElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/HTML/HTMLFontElement.h>
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLLIElement.h>
 #include <LibWeb/HTML/HTMLOListElement.h>
+#include <LibWeb/HTML/HTMLParagraphElement.h>
 #include <LibWeb/HTML/HTMLTableCellElement.h>
 #include <LibWeb/HTML/HTMLTableRowElement.h>
 #include <LibWeb/HTML/HTMLTableSectionElement.h>
@@ -37,26 +44,146 @@
 
 namespace Web::Editing {
 
+// https://w3c.github.io/editing/docs/execCommand/#active-range
+GC::Ptr<DOM::Range> active_range(DOM::Document const& document)
+{
+    // The active range is the range of the selection given by calling getSelection() on the context object. (Thus the
+    // active range may be null.)
+    auto selection = document.get_selection();
+    if (!selection)
+        return {};
+    return selection->range();
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#alignment-value
+JustifyAlignment alignment_value_of_node(GC::Ptr<DOM::Node> node)
+{
+    // 1. While node is neither null nor an Element, or it is an Element but its "display" property has resolved value
+    //    "inline" or "none", set node to its parent.
+    auto is_display_inline_or_none = [](GC::Ref<DOM::Node> node) {
+        auto display = resolved_display(node);
+        if (!display.has_value())
+            return false;
+        return (display.value().is_inline_outside() && display.value().is_flow_inside()) || display.value().is_none();
+    };
+    while ((node && !is<DOM::Element>(node.ptr())) || (is<DOM::Element>(node.ptr()) && is_display_inline_or_none(*node)))
+        node = node->parent();
+
+    // 2. If node is not an Element, return "left".
+    if (!is<DOM::Element>(node.ptr()))
+        return JustifyAlignment::Left;
+    GC::Ref<DOM::Element> element = static_cast<DOM::Element&>(*node);
+
+    // 3. If node's "text-align" property has resolved value "start", return "left" if the directionality of node is
+    //    "ltr", "right" if it is "rtl".
+    auto text_align_value = resolved_keyword(*node, CSS::PropertyID::TextAlign);
+    if (!text_align_value.has_value())
+        return JustifyAlignment::Left;
+    if (text_align_value.value() == CSS::Keyword::Start)
+        return element->directionality() == DOM::Element::Directionality::Ltr ? JustifyAlignment::Left : JustifyAlignment::Right;
+
+    // 4. If node's "text-align" property has resolved value "end", return "right" if the directionality of node is
+    //    "ltr", "left" if it is "rtl".
+    if (text_align_value.value() == CSS::Keyword::End)
+        return element->directionality() == DOM::Element::Directionality::Ltr ? JustifyAlignment::Right : JustifyAlignment::Left;
+
+    // 5. If node's "text-align" property has resolved value "center", "justify", "left", or "right", return that value.
+    switch (text_align_value.value()) {
+    case CSS::Keyword::Center:
+        return JustifyAlignment::Center;
+    case CSS::Keyword::Justify:
+        return JustifyAlignment::Justify;
+    case CSS::Keyword::Left:
+        return JustifyAlignment::Left;
+    case CSS::Keyword::Right:
+        return JustifyAlignment::Right;
+    default:
+        // 6. Return "left".
+        return JustifyAlignment::Left;
+    }
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#autolink
+void autolink(DOM::BoundaryPoint point)
+{
+    // 1. While (node, end offset)'s previous equivalent point is not null, set it to its previous equivalent point.
+    while (true) {
+        auto previous_point = previous_equivalent_point(point);
+        if (!previous_point.has_value())
+            break;
+        point = previous_point.release_value();
+    }
+
+    // 2. If node is not a Text node, or has an a ancestor, do nothing and abort these steps.
+    if (!is<DOM::Text>(*point.node) || point.node->first_ancestor_of_type<HTML::HTMLAnchorElement>())
+        return;
+
+    // FIXME: 3. Let search be the largest substring of node's data whose end is end offset and that contains no space
+    //    characters.
+
+    // FIXME: 4. If some substring of search is an autolinkable URL:
+    String href;
+    if (false) {
+        // FIXME: 1. While there is no substring of node's data ending at end offset that is an autolinkable URL, decrement end
+        //    offset.
+
+        // FIXME: 2. Let start offset be the start index of the longest substring of node's data that is an autolinkable URL
+        //    ending at end offset.
+
+        // FIXME: 3. Let href be the substring of node's data starting at start offset and ending at end offset.
+    }
+
+    // FIXME: 5. Otherwise, if some substring of search is a valid e-mail address:
+    else if (false) {
+        // FIXME: 1. While there is no substring of node's data ending at end offset that is a valid e-mail address, decrement
+        //    end offset.
+
+        // FIXME: 2. Let start offset be the start index of the longest substring of node's data that is a valid e-mail address
+        //    ending at end offset.
+
+        // FIXME: 3. Let href be "mailto:" concatenated with the substring of node's data starting at start offset and ending
+        //    at end offset.
+    }
+
+    // 6. Otherwise, do nothing and abort these steps.
+    else {
+        return;
+    }
+
+    // 7. Let original range be the active range.
+    auto& document = point.node->document();
+    auto original_range = active_range(document);
+
+    // FIXME: 8. Create a new range with start (node, start offset) and end (node, end offset), and set the context object's
+    //    selection's range to it.
+
+    // 9. Take the action for "createLink", with value equal to href.
+    take_the_action_for_command(document, CommandNames::createLink, href);
+
+    // 10. Set the context object's selection's range to original range.
+    if (original_range)
+        document.get_selection()->add_range(*original_range);
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#block-extend
-GC::Ref<DOM::Range> block_extend_a_range(DOM::Range& range)
+GC::Ref<DOM::Range> block_extend_a_range(GC::Ref<DOM::Range> range)
 {
     // 1. Let start node, start offset, end node, and end offset be the start and end nodes and offsets of range.
-    GC::Ptr<DOM::Node> start_node = range.start_container();
-    auto start_offset = range.start_offset();
-    GC::Ptr<DOM::Node> end_node = range.end_container();
-    auto end_offset = range.end_offset();
+    GC::Ptr<DOM::Node> start_node = range->start_container();
+    auto start_offset = range->start_offset();
+    GC::Ptr<DOM::Node> end_node = range->end_container();
+    auto end_offset = range->end_offset();
 
     // 2. If some inclusive ancestor of start node is an li, set start offset to the index of the last such li in tree
     //    order, and set start node to that li's parent.
-    auto ancestor = start_node;
-    while (ancestor) {
+    start_node->for_each_inclusive_ancestor([&](GC::Ref<DOM::Node> ancestor) {
         if (is<HTML::HTMLLIElement>(*ancestor)) {
             start_offset = ancestor->index();
             start_node = ancestor->parent();
-            break;
+            return IterationDecision::Break;
         }
-        ancestor = ancestor->parent();
-    }
+        return IterationDecision::Continue;
+    });
 
     // 3. If (start node, start offset) is not a block start point, repeat the following steps:
     if (!is_block_start_point({ *start_node, start_offset })) {
@@ -85,15 +212,14 @@ GC::Ref<DOM::Range> block_extend_a_range(DOM::Range& range)
 
     // 5. If some inclusive ancestor of end node is an li, set end offset to one plus the index of the last such li in
     //    tree order, and set end node to that li's parent.
-    ancestor = end_node;
-    while (ancestor) {
+    end_node->for_each_inclusive_ancestor([&](GC::Ref<DOM::Node> ancestor) {
         if (is<HTML::HTMLLIElement>(*ancestor)) {
             end_offset = ancestor->index() + 1;
             end_node = ancestor->parent();
-            break;
+            return IterationDecision::Break;
         }
-        ancestor = ancestor->parent();
-    }
+        return IterationDecision::Continue;
+    });
 
     // 6. If (end node, end offset) is not a block end point, repeat the following steps:
     if (!is_block_end_point({ *end_node, end_offset })) {
@@ -458,6 +584,118 @@ void canonicalize_whitespace(DOM::BoundaryPoint boundary, bool fix_collapsed_spa
     }
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#clear-the-value
+Vector<GC::Ref<DOM::Node>> clear_the_value(FlyString const& command, GC::Ref<DOM::Element> element)
+{
+    // 1. Let command be the current command.
+
+    // 2. If element is not editable, return the empty list.
+    if (!element->is_editable())
+        return {};
+
+    // 3. If element's specified command value for command is null, return the empty list.
+    if (!specified_command_value(element, command).has_value())
+        return {};
+
+    // 4. If element is a simple modifiable element:
+    if (is_simple_modifiable_element(element)) {
+        // 1. Let children be the children of element.
+        Vector<GC::Ref<DOM::Node>> children;
+        element->for_each_child([&children](DOM::Node& child) {
+            children.append(child);
+            return IterationDecision::Continue;
+        });
+
+        // 2. For each child in children, insert child into element's parent immediately before element, preserving
+        //    ranges.
+        auto element_index = element->index();
+        for (auto child : children)
+            move_node_preserving_ranges(child, *element->parent(), element_index++);
+
+        // 3. Remove element from its parent.
+        element->remove();
+
+        // 4. Return children.
+        return children;
+    }
+
+    // 5. If command is "strikethrough", and element has a style attribute that sets "text-decoration" to some value
+    //    containing "line-through", delete "line-through" from the value.
+    auto remove_text_decoration_value = [&element](CSS::Keyword keyword_to_delete) {
+        auto inline_style = element->inline_style();
+        if (!inline_style)
+            return;
+
+        auto style_property = inline_style->property(CSS::PropertyID::TextDecoration);
+        if (!style_property.has_value())
+            return;
+
+        auto style_value = style_property.value().value;
+        VERIFY(style_value->is_value_list());
+        auto const& value_list = style_value->as_value_list();
+        auto& old_values = value_list.values();
+
+        auto new_values = old_values;
+        auto was_removed = new_values.remove_all_matching([&](CSS::ValueComparingNonnullRefPtr<CSS::CSSStyleValue const> const& value) {
+            return value->is_keyword() && value->as_keyword().keyword() == keyword_to_delete;
+        });
+        if (!was_removed)
+            return;
+        if (new_values.is_empty()) {
+            MUST(inline_style->remove_property(string_from_property_id(CSS::PropertyID::TextDecoration)));
+            return;
+        }
+
+        auto new_style_value = CSS::StyleValueList::create(move(new_values), value_list.separator());
+        MUST(inline_style->set_property(
+            string_from_property_id(CSS::PropertyID::TextDecoration),
+            new_style_value->to_string(CSS::CSSStyleValue::SerializationMode::Normal),
+            {}));
+    };
+    if (command == CommandNames::strikethrough)
+        remove_text_decoration_value(CSS::Keyword::LineThrough);
+
+    // 6. If command is "underline", and element has a style attribute that sets "text-decoration" to some value
+    //    containing "underline", delete "underline" from the value.
+    if (command == CommandNames::underline)
+        remove_text_decoration_value(CSS::Keyword::Underline);
+
+    // 7. If the relevant CSS property for command is not null, unset that property of element.
+    auto command_definition = find_command_definition(command);
+    // FIXME: remove command_definition.has_value() as soon as all commands are implemented.
+    if (command_definition.has_value() && command_definition.value().relevant_css_property.has_value()) {
+        auto property_to_remove = command_definition.value().relevant_css_property.value();
+        if (auto inline_style = element->inline_style())
+            MUST(inline_style->remove_property(string_from_property_id(property_to_remove)));
+    }
+
+    // 8. If element is a font element:
+    if (is<HTML::HTMLFontElement>(*element)) {
+        // 1. If command is "foreColor", unset element's color attribute, if set.
+        if (command == CommandNames::foreColor)
+            element->remove_attribute(HTML::AttributeNames::color);
+
+        // 2. If command is "fontName", unset element's face attribute, if set.
+        if (command == CommandNames::fontName)
+            element->remove_attribute(HTML::AttributeNames::face);
+
+        // 3. If command is "fontSize", unset element's size attribute, if set.
+        if (command == CommandNames::fontSize)
+            element->remove_attribute(HTML::AttributeNames::size);
+    }
+
+    // 9. If element is an a element and command is "createLink" or "unlink", unset the href property of element.
+    if (is<HTML::HTMLAnchorElement>(*element) && command.is_one_of(CommandNames::createLink, CommandNames::unlink))
+        element->remove_attribute(HTML::AttributeNames::href);
+
+    // 10. If element's specified command value for command is null, return the empty list.
+    if (!specified_command_value(element, command).has_value())
+        return {};
+
+    // 11. Set the tag name of element to "span", and return the one-node list consisting of the result.
+    return { set_the_tag_name(element, HTML::TagNames::span) };
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#delete-the-selection
 void delete_the_selection(Selection& selection, bool block_merging, bool strip_wrappers, Selection::Direction direction)
 {
@@ -465,21 +703,20 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
 
     // 1. If the active range is null, abort these steps and do nothing.
     // NOTE: The selection is collapsed often in this algorithm, so we shouldn't store the active range in a variable.
-    auto active_range = [&selection] { return selection.range(); };
-    if (!active_range())
+    if (!active_range(document))
         return;
 
     // 2. Canonicalize whitespace at the active range's start.
-    canonicalize_whitespace(active_range()->start());
+    canonicalize_whitespace(active_range(document)->start());
 
     // 3. Canonicalize whitespace at the active range's end.
-    canonicalize_whitespace(active_range()->end());
+    canonicalize_whitespace(active_range(document)->end());
 
     // 4. Let (start node, start offset) be the last equivalent point for the active range's start.
-    auto start = last_equivalent_point(active_range()->start());
+    auto start = last_equivalent_point(active_range(document)->start());
 
     // 5. Let (end node, end offset) be the first equivalent point for the active range's end.
-    auto end = first_equivalent_point(active_range()->end());
+    auto end = first_equivalent_point(active_range(document)->end());
 
     // 6. If (end node, end offset) is not after (start node, start offset):
     auto relative_position = DOM::position_of_boundary_point_relative_to_other_boundary_point({ end.node, end.offset }, { start.node, start.offset });
@@ -523,7 +760,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
     MUST(selection.extend(end.node, end.offset));
 
     // 12. Let start block be the active range's start node.
-    GC::Ptr<DOM::Node> start_block = active_range()->start_container();
+    GC::Ptr<DOM::Node> start_block = active_range(document)->start_container();
 
     // 13. While start block's parent is in the same editing host and start block is an inline node, set start block to
     //     its parent.
@@ -538,7 +775,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         start_block = {};
 
     // 15. Let end block be the active range's end node.
-    GC::Ptr<DOM::Node> end_block = active_range()->end_container();
+    GC::Ptr<DOM::Node> end_block = active_range(document)->end_container();
 
     // 16. While end block's parent is in the same editing host and end block is an inline node, set end block to its
     //     parent.
@@ -553,7 +790,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         end_block = {};
 
     // 19. Record current states and values, and let overrides be the result.
-    auto overrides = record_current_states_and_values(*active_range());
+    auto overrides = record_current_states_and_values(document);
 
     // 21. If start node and end node are the same, and start node is an editable Text node:
     if (start.node == end.node && is<DOM::Text>(*start.node) && start.node->is_editable()) {
@@ -574,7 +811,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         }
 
         // 5. Restore states and values from overrides.
-        restore_states_and_values(*selection.range(), overrides);
+        restore_states_and_values(document, overrides);
 
         // 6. Abort these steps.
         return;
@@ -590,21 +827,17 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
 
     // 24. For each node contained in the active range, append node to node list if the last member of node list (if
     //     any) is not an ancestor of node; node is editable; and node is not a thead, tbody, tfoot, tr, th, or td.
-    auto common_ancestor = active_range()->common_ancestor_container();
-    common_ancestor->for_each_in_subtree([&](GC::Ref<DOM::Node> node) {
-        if (!active_range()->contains_node(node))
-            return TraversalDecision::SkipChildrenAndContinue;
-
+    active_range(document)->for_each_contained([&node_list](GC::Ref<DOM::Node> node) {
         if (!node_list.is_empty() && node_list.last()->is_ancestor_of(node))
-            return TraversalDecision::SkipChildrenAndContinue;
+            return IterationDecision::Continue;
 
         if (!node->is_editable())
-            return TraversalDecision::Continue;
+            return IterationDecision::Continue;
 
         if (!is<HTML::HTMLTableSectionElement>(*node) && !is<HTML::HTMLTableRowElement>(*node) && !is<HTML::HTMLTableCellElement>(*node))
             node_list.append(node);
 
-        return TraversalDecision::Continue;
+        return IterationDecision::Continue;
     });
 
     // 25. For each node in node list:
@@ -639,10 +872,10 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         MUST(static_cast<DOM::Text&>(*end.node).delete_data(0, end.offset));
 
     // 27. Canonicalize whitespace at the active range's start, with fix collapsed space false.
-    canonicalize_whitespace(active_range()->start(), false);
+    canonicalize_whitespace(active_range(document)->start(), false);
 
     // 28. Canonicalize whitespace at the active range's end, with fix collapsed space false.
-    canonicalize_whitespace(active_range()->end(), false);
+    canonicalize_whitespace(active_range(document)->end(), false);
 
     // 30. If block merging is false, or start block or end block is null, or start block is not in the same editing
     //     host as end block, or start block and end block are the same:
@@ -658,7 +891,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         }
 
         // 3. Restore states and values from overrides.
-        restore_states_and_values(*selection.range(), overrides);
+        restore_states_and_values(document, overrides);
 
         // 4. Abort these steps.
         return;
@@ -708,7 +941,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
                 end_block->remove();
 
             // 4. Restore states and values from overrides.
-            restore_states_and_values(*active_range(), overrides);
+            restore_states_and_values(document, overrides);
 
             // 5. Abort these steps.
             return;
@@ -717,7 +950,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         // 5. If end block's firstChild is not an inline node, restore states and values from record, then abort these
         //    steps.
         if (!is_inline_node(*end_block->first_child())) {
-            restore_states_and_values(*active_range(), overrides);
+            restore_states_and_values(document, overrides);
             return;
         }
 
@@ -831,18 +1064,17 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
     //     same editing host, or an inclusive ancestor ul in the same editing host whose nextSibling is also a ul in the
     //     same editing host:
     while (true) {
-        auto inclusive_ancestor = ancestor;
         bool has_valid_ol_or_ul_ancestor = false;
-        while (inclusive_ancestor) {
+        ancestor->for_each_inclusive_ancestor([&](GC::Ref<DOM::Node> inclusive_ancestor) {
             if (inclusive_ancestor->next_sibling() && is_in_same_editing_host(*ancestor, *inclusive_ancestor)
                 && is_in_same_editing_host(*inclusive_ancestor, *inclusive_ancestor->next_sibling())
                 && ((is<HTML::HTMLOListElement>(*inclusive_ancestor) && is<HTML::HTMLOListElement>(*inclusive_ancestor->next_sibling()))
                     || (is<HTML::HTMLUListElement>(*inclusive_ancestor) && is<HTML::HTMLUListElement>(*inclusive_ancestor->next_sibling())))) {
                 has_valid_ol_or_ul_ancestor = true;
-                break;
+                return IterationDecision::Break;
             }
-            inclusive_ancestor = inclusive_ancestor->parent();
-        }
+            return IterationDecision::Continue;
+        });
         if (!has_valid_ol_or_ul_ancestor)
             break;
 
@@ -880,7 +1112,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
     remove_extraneous_line_breaks_at_the_end_of_node(*start_block);
 
     // 41. Restore states and values from overrides.
-    restore_states_and_values(*active_range(), overrides);
+    restore_states_and_values(document, overrides);
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#editing-host-of
@@ -892,13 +1124,16 @@ GC::Ptr<DOM::Node> editing_host_of_node(GC::Ref<DOM::Node> node)
 
     // or the nearest ancestor of node that is an editing host, if node is editable.
     if (node->is_editable()) {
-        auto* ancestor = node->parent();
-        while (ancestor) {
-            if (ancestor->is_editing_host())
-                return ancestor;
-            ancestor = ancestor->parent();
-        }
-        VERIFY_NOT_REACHED();
+        GC::Ptr<DOM::Node> result;
+        node->for_each_ancestor([&result](GC::Ref<DOM::Node> ancestor) {
+            if (ancestor->is_editing_host()) {
+                result = ancestor;
+                return IterationDecision::Break;
+            }
+            return IterationDecision::Continue;
+        });
+        VERIFY(result);
+        return result;
     }
 
     // The editing host of node is null if node is neither editable nor an editing host;
@@ -999,14 +1234,9 @@ Optional<String> effective_command_value(GC::Ptr<DOM::Node> node, FlyString cons
         auto inclusive_ancestor = node;
         do {
             auto text_decoration_line = resolved_value(*node, CSS::PropertyID::TextDecorationLine);
-            if (text_decoration_line.has_value() && text_decoration_line.value()->is_value_list()) {
-                auto const& line_value_list = text_decoration_line.value()->as_value_list();
-                auto has_line_through = line_value_list.values().find_first_index_if([](CSS::CSSStyleValue const& value) {
-                    return value.is_keyword() && value.as_keyword().keyword() == CSS::Keyword::LineThrough;
-                });
-                if (has_line_through.has_value())
-                    return "line-through"_string;
-            }
+            if (text_decoration_line.has_value() && text_decoration_line.value()->is_value_list()
+                && value_list_contains_keyword(text_decoration_line.value()->as_value_list(), CSS::Keyword::LineThrough))
+                return "line-through"_string;
             inclusive_ancestor = inclusive_ancestor->parent();
         } while (inclusive_ancestor);
 
@@ -1019,14 +1249,9 @@ Optional<String> effective_command_value(GC::Ptr<DOM::Node> node, FlyString cons
         auto inclusive_ancestor = node;
         do {
             auto text_decoration_line = resolved_value(*node, CSS::PropertyID::TextDecorationLine);
-            if (text_decoration_line.has_value() && text_decoration_line.value()->is_value_list()) {
-                auto const& line_value_list = text_decoration_line.value()->as_value_list();
-                auto has_line_through = line_value_list.values().find_first_index_if([](CSS::CSSStyleValue const& value) {
-                    return value.is_keyword() && value.as_keyword().keyword() == CSS::Keyword::Underline;
-                });
-                if (has_line_through.has_value())
-                    return "line-through"_string;
-            }
+            if (text_decoration_line.has_value() && text_decoration_line.value()->is_value_list()
+                && value_list_contains_keyword(text_decoration_line.value()->as_value_list(), CSS::Keyword::Underline))
+                return "underline"_string;
             inclusive_ancestor = inclusive_ancestor->parent();
         } while (inclusive_ancestor);
 
@@ -1072,14 +1297,13 @@ void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node> node)
 
     // 2. If node is not an allowed child of any of its ancestors in the same editing host:
     bool allowed_child_of_any_ancestor = false;
-    GC::Ptr<DOM::Node> ancestor = node->parent();
-    while (ancestor) {
-        if (is_in_same_editing_host(*ancestor, *node) && is_allowed_child_of_node(GC::Ref { *node }, GC::Ref { *ancestor })) {
+    node->for_each_ancestor([&](GC::Ref<DOM::Node> ancestor) {
+        if (is_in_same_editing_host(ancestor, node) && is_allowed_child_of_node(node, ancestor)) {
             allowed_child_of_any_ancestor = true;
-            break;
+            return IterationDecision::Break;
         }
-        ancestor = ancestor->parent();
-    }
+        return IterationDecision::Continue;
+    });
     if (!allowed_child_of_any_ancestor) {
         // 1. If node is a dd or dt, wrap the one-node list consisting of node, with sibling criteria returning true for
         //    any dl with no attributes and false otherwise, and new parent instructions returning the result of calling
@@ -1098,11 +1322,11 @@ void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node> node)
         }
 
         // 2. If "p" is not an allowed child of the editing host of node, abort these steps.
-        if (!is_allowed_child_of_node(HTML::TagNames::p, GC::Ref { *editing_host_of_node(*node) }))
+        if (!is_allowed_child_of_node(HTML::TagNames::p, GC::Ref { *editing_host_of_node(node) }))
             return;
 
         // 3. If node is not a prohibited paragraph child, abort these steps.
-        if (!is_prohibited_paragraph_child(*node))
+        if (!is_prohibited_paragraph_child(node))
             return;
 
         // 4. Set the tag name of node to the default single-line container name, and let node be the result.
@@ -1134,11 +1358,11 @@ void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node> node)
     }
 
     // 3. Record the values of the one-node list consisting of node, and let values be the result.
-    auto values = record_the_values_of_nodes({ *node });
+    auto values = record_the_values_of_nodes({ node });
 
     // 4. While node is not an allowed child of its parent, split the parent of the one-node list consisting of node.
-    while (!is_allowed_child_of_node(GC::Ref { *node }, GC::Ref { *node->parent() }))
-        split_the_parent_of_nodes({ *node });
+    while (!is_allowed_child_of_node(node, GC::Ref { *node->parent() }))
+        split_the_parent_of_nodes({ node });
 
     // 5. Restore the values from values.
     restore_the_values_of_nodes(values);
@@ -1174,6 +1398,290 @@ bool follows_a_line_break(GC::Ref<DOM::Node> node)
 
     // 3. Return true.
     return true;
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#force-the-value
+void force_the_value(GC::Ref<DOM::Node> node, FlyString const& command, Optional<String> new_value)
+{
+    // 1. Let command be the current command.
+
+    // 2. If node's parent is null, abort this algorithm.
+    if (!node->parent())
+        return;
+
+    // 3. If new value is null, abort this algorithm.
+    if (!new_value.has_value())
+        return;
+
+    // 4. If node is an allowed child of "span":
+    if (is_allowed_child_of_node(node, HTML::TagNames::span)) {
+        // 1. Reorder modifiable descendants of node's previousSibling.
+        if (node->previous_sibling())
+            reorder_modifiable_descendants(*node->previous_sibling(), command, new_value);
+
+        // 2. Reorder modifiable descendants of node's nextSibling.
+        if (node->next_sibling())
+            reorder_modifiable_descendants(*node->next_sibling(), command, new_value);
+
+        // 3. Wrap the one-node list consisting of node, with sibling criteria returning true for a simple modifiable
+        //    element whose specified command value is equivalent to new value and whose effective command value is
+        //    loosely equivalent to new value and false otherwise, and with new parent instructions returning null.
+        wrap(
+            { node },
+            [&](GC::Ref<DOM::Node> sibling) {
+                return is_simple_modifiable_element(sibling)
+                    && specified_command_value(static_cast<DOM::Element&>(*sibling), command) == new_value
+                    && values_are_loosely_equivalent(command, effective_command_value(sibling, command), new_value);
+            },
+            [] -> GC::Ptr<DOM::Node> { return {}; });
+    }
+
+    // 5. If node is invisible, abort this algorithm.
+    if (is_invisible_node(node))
+        return;
+
+    // 6. If the effective command value of command is loosely equivalent to new value on node, abort this algorithm.
+    if (values_are_loosely_equivalent(command, effective_command_value(node, command), new_value))
+        return;
+
+    // 7. If node is not an allowed child of "span":
+    if (!is_allowed_child_of_node(node, HTML::TagNames::span)) {
+        // 1. Let children be all children of node, omitting any that are Elements whose specified command value for
+        //    command is neither null nor equivalent to new value.
+        Vector<GC::Ref<DOM::Node>> children;
+        node->for_each_child([&](GC::Ref<DOM::Node> child) {
+            if (is<DOM::Element>(*child)) {
+                auto const& child_specified_value = specified_command_value(static_cast<DOM::Element&>(*child), command);
+                if (child_specified_value.has_value() && !values_are_equivalent(command, child_specified_value.value(), new_value))
+                    return IterationDecision::Continue;
+            }
+
+            children.append(child);
+            return IterationDecision::Continue;
+        });
+
+        // 2. Force the value of each node in children, with command and new value as in this invocation of the
+        //    algorithm.
+        for (auto child : children)
+            force_the_value(child, command, new_value);
+
+        // 3. Abort this algorithm.
+        return;
+    }
+
+    // 8. If the effective command value of command is loosely equivalent to new value on node, abort this algorithm.
+    if (values_are_loosely_equivalent(command, effective_command_value(node, command), new_value))
+        return;
+
+    // 9. Let new parent be null.
+    GC::Ptr<DOM::Element> new_parent;
+
+    // 10. If the CSS styling flag is false:
+    auto& document = node->document();
+    if (!document.css_styling_flag()) {
+        // 1. If command is "bold" and new value is "bold", let new parent be the result of calling createElement("b")
+        //    on the ownerDocument of node.
+        if (command == CommandNames::bold && new_value == "bold"sv)
+            new_parent = MUST(DOM::create_element(document, HTML::TagNames::b, Namespace::HTML));
+
+        // 2. If command is "italic" and new value is "italic", let new parent be the result of calling
+        //    createElement("i") on the ownerDocument of node.
+        if (command == CommandNames::italic && new_value == "italic"sv)
+            new_parent = MUST(DOM::create_element(document, HTML::TagNames::i, Namespace::HTML));
+
+        // 3. If command is "strikethrough" and new value is "line-through", let new parent be the result of calling
+        //    createElement("s") on the ownerDocument of node.
+        if (command == CommandNames::strikethrough && new_value == "line-through"sv)
+            new_parent = MUST(DOM::create_element(document, HTML::TagNames::s, Namespace::HTML));
+
+        // 4. If command is "underline" and new value is "underline", let new parent be the result of calling
+        //    createElement("u") on the ownerDocument of node.
+        if (command == CommandNames::underline && new_value == "underline"sv)
+            new_parent = MUST(DOM::create_element(document, HTML::TagNames::u, Namespace::HTML));
+
+        // 5.  If command is "foreColor", and new value is fully opaque with red, green, and blue components in the
+        //     range 0 to 255:
+        if (command == CommandNames::foreColor) {
+            auto new_value_color = Color::from_string(new_value.value());
+            if (new_value_color->alpha() == NumericLimits<u8>::max()) {
+                // 1. Let new parent be the result of calling createElement("font") on the ownerDocument of node.
+                new_parent = MUST(DOM::create_element(document, HTML::TagNames::font, Namespace::HTML));
+
+                // 2. Set the color attribute of new parent to the result of applying the rules for serializing simple color
+                //    values to new value (interpreted as a simple color).
+                MUST(new_parent->set_attribute(HTML::AttributeNames::color, new_value_color->to_string_without_alpha()));
+            }
+        }
+
+        // 6. If command is "fontName", let new parent be the result of calling createElement("font") on the
+        //    ownerDocument of node, then set the face attribute of new parent to new value.
+        if (command == CommandNames::fontName) {
+            new_parent = MUST(DOM::create_element(document, HTML::TagNames::font, Namespace::HTML));
+            MUST(new_parent->set_attribute(HTML::AttributeNames::face, new_value.value()));
+        }
+    }
+
+    // 11. If command is "createLink" or "unlink":
+    if (command.is_one_of(CommandNames::createLink, CommandNames::unlink)) {
+        // 1. Let new parent be the result of calling createElement("a") on the ownerDocument of node.
+        new_parent = MUST(DOM::create_element(document, HTML::TagNames::a, Namespace::HTML));
+
+        // 2. Set the href attribute of new parent to new value.
+        MUST(new_parent->set_attribute(HTML::AttributeNames::href, new_value.value()));
+
+        // 3. Let ancestor be node's parent.
+        GC::Ptr<DOM::Node> ancestor = node->parent();
+
+        // 4. While ancestor is not null:
+        while (ancestor) {
+            // 1. If ancestor is an a, set the tag name of ancestor to "span", and let ancestor be the result.
+            if (is<HTML::HTMLAnchorElement>(*ancestor))
+                ancestor = set_the_tag_name(static_cast<DOM::Element&>(*ancestor), HTML::TagNames::span);
+
+            // 2. Set ancestor to its parent.
+            ancestor = ancestor->parent();
+        }
+    }
+
+    // 12. If command is "fontSize"; and new value is one of "x-small", "small", "medium", "large", "x-large",
+    //     "xx-large", or "xxx-large"; and either the CSS styling flag is false, or new value is "xxx-large":
+    auto const& font_sizes = named_font_sizes();
+    if (command == CommandNames::fontSize && font_sizes.contains_slow(new_value.value())
+        && (!document.css_styling_flag() || new_value == "xxx-large"sv)) {
+        // let new parent be the result of calling createElement("font") on the ownerDocument of node,
+        new_parent = MUST(DOM::create_element(document, HTML::TagNames::font, Namespace::HTML));
+
+        // then set the size attribute of new parent to the number from the following table based on new value:
+        // * x-small: 1
+        // * small: 2
+        // * normal: 3
+        // * large: 4
+        // * x-large: 5
+        // * xx-large: 6
+        // * xxx-large: 7
+        auto size = font_sizes.first_index_of(new_value.value()).value() + 1;
+        MUST(new_parent->set_attribute(HTML::AttributeNames::size, String::number(size)));
+    }
+
+    // 13. If command is "subscript" or "superscript" and new value is "subscript", let new parent be the result of
+    //     calling createElement("sub") on the ownerDocument of node.
+    if (command.is_one_of(CommandNames::subscript, CommandNames::superscript) && new_value == "subscript"sv)
+        new_parent = MUST(DOM::create_element(document, HTML::TagNames::sub, Namespace::HTML));
+
+    // 14. If command is "subscript" or "superscript" and new value is "superscript", let new parent be the result of
+    //     calling createElement("sup") on the ownerDocument of node.
+    if (command.is_one_of(CommandNames::subscript, CommandNames::superscript) && new_value == "superscript"sv)
+        new_parent = MUST(DOM::create_element(document, HTML::TagNames::sup, Namespace::HTML));
+
+    // 15. If new parent is null, let new parent be the result of calling createElement("span") on the ownerDocument of
+    //     node.
+    if (!new_parent)
+        new_parent = MUST(DOM::create_element(document, HTML::TagNames::span, Namespace::HTML));
+
+    // 16. Insert new parent in node's parent before node.
+    node->parent()->insert_before(*new_parent, node);
+
+    // 17. If the effective command value of command for new parent is not loosely equivalent to new value, and the
+    //     relevant CSS property for command is not null, set that CSS property of new parent to new value (if the new
+    //     value would be valid).
+    if (!values_are_loosely_equivalent(command, effective_command_value(new_parent, command), new_value)) {
+        auto const& command_definition = find_command_definition(command);
+        if (command_definition.has_value() && command_definition.value().relevant_css_property.has_value()) {
+            auto inline_style = new_parent->style_for_bindings();
+            MUST(inline_style->set_property(command_definition.value().relevant_css_property.value(), new_value.value()));
+        }
+    }
+
+    // 18. If command is "strikethrough", and new value is "line-through", and the effective command value of
+    //     "strikethrough" for new parent is not "line-through", set the "text-decoration" property of new parent to
+    //     "line-through".
+    if (command == CommandNames::strikethrough && new_value == "line-through"sv
+        && effective_command_value(new_parent, command) != "line-through"sv) {
+        auto inline_style = new_parent->style_for_bindings();
+        MUST(inline_style->set_property(CSS::PropertyID::TextDecoration, "line-through"sv));
+    }
+
+    // 19. If command is "underline", and new value is "underline", and the effective command value of "underline" for
+    //     new parent is not "underline", set the "text-decoration" property of new parent to "underline".
+    if (command == CommandNames::underline && new_value == "underline"sv
+        && effective_command_value(new_parent, command) != "underline"sv) {
+        auto inline_style = new_parent->style_for_bindings();
+        MUST(inline_style->set_property(CSS::PropertyID::TextDecoration, "underline"sv));
+    }
+
+    // 20. Append node to new parent as its last child, preserving ranges.
+    move_node_preserving_ranges(node, *new_parent, new_parent->child_count());
+
+    // 21. If node is an Element and the effective command value of command for node is not loosely equivalent to new
+    //     value:
+    if (is<DOM::Element>(*node) && !values_are_loosely_equivalent(command, effective_command_value(node, command), new_value)) {
+        // 1. Insert node into the parent of new parent before new parent, preserving ranges.
+        move_node_preserving_ranges(node, *new_parent->parent(), new_parent->index());
+
+        // 2. Remove new parent from its parent.
+        new_parent->remove();
+
+        // 3. Let children be all children of node, omitting any that are Elements whose specified command value for
+        //    command is neither null nor equivalent to new value.
+        Vector<GC::Ref<DOM::Node>> children;
+        node->for_each_child([&](GC::Ref<DOM::Node> child) {
+            if (is<DOM::Element>(*child)) {
+                auto child_value = specified_command_value(static_cast<DOM::Element&>(*child), command);
+                if (child_value.has_value() && !values_are_equivalent(command, child_value.value(), new_value))
+                    return IterationDecision::Continue;
+            }
+
+            children.append(child);
+            return IterationDecision::Continue;
+        });
+
+        // 4. Force the value of each node in children, with command and new value as in this invocation of the
+        //    algorithm.
+        for (auto child : children)
+            force_the_value(child, command, new_value);
+    }
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#indent
+void indent(Vector<GC::Ref<DOM::Node>> node_list)
+{
+    // 1. If node list is empty, do nothing and abort these steps.
+    if (node_list.is_empty())
+        return;
+
+    // 2. Let first node be the first member of node list.
+    auto first_node = node_list.first();
+
+    // 3. If first node's parent is an ol or ul:
+    if (is<HTML::HTMLOListElement>(first_node->parent()) || is<HTML::HTMLUListElement>(first_node->parent())) {
+        // 1. Let tag be the local name of the parent of first node.
+        auto tag = static_cast<DOM::Element*>(first_node->parent())->local_name();
+
+        // 2. Wrap node list, with sibling criteria returning true for an HTML element with local name tag and false
+        //    otherwise, and new parent instructions returning the result of calling createElement(tag) on the
+        //    ownerDocument of first node.
+        wrap(
+            node_list,
+            [&](GC::Ref<DOM::Node> sibling) {
+                return is<DOM::Element>(*sibling) && static_cast<DOM::Element&>(*sibling).local_name() == tag;
+            },
+            [&] { return MUST(DOM::create_element(*first_node->owner_document(), tag, Namespace::HTML)); });
+
+        // 3. Abort these steps.
+        return;
+    }
+
+    // 4. Wrap node list, with sibling criteria returning true for a simple indentation element and false otherwise, and
+    //    new parent instructions returning the result of calling createElement("blockquote") on the ownerDocument of
+    //    first node. Let new parent be the result.
+    auto new_parent = wrap(
+        node_list,
+        [&](GC::Ref<DOM::Node> sibling) { return is_simple_indentation_element(sibling); },
+        [&] { return MUST(DOM::create_element(*first_node->owner_document(), HTML::TagNames::blockquote, Namespace::HTML)); });
+
+    // 5. Fix disallowed ancestors of new parent.
+    if (new_parent)
+        fix_disallowed_ancestors_of_node(*new_parent);
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#allowed-child
@@ -1633,11 +2141,21 @@ bool is_extraneous_line_break(GC::Ref<DOM::Node> node)
     return false;
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#formattable-block-name
+bool is_formattable_block_name(FlyString const& local_name)
+{
+    // A formattable block name is "address", "dd", "div", "dt", "h1", "h2", "h3", "h4", "h5", "h6", "p", or "pre".
+    return local_name.is_one_of(HTML::TagNames::address, HTML::TagNames::dd, HTML::TagNames::div, HTML::TagNames::dt,
+        HTML::TagNames::h1, HTML::TagNames::h2, HTML::TagNames::h3, HTML::TagNames::h4, HTML::TagNames::h5,
+        HTML::TagNames::h6, HTML::TagNames::p, HTML::TagNames::pre);
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#formattable-node
 bool is_formattable_node(GC::Ref<DOM::Node> node)
 {
     // A formattable node is an editable visible node that is either a Text node, an img, or a br.
-    return is<DOM::Text>(*node) || is<HTML::HTMLImageElement>(*node) || is<HTML::HTMLBRElement>(*node);
+    return node->is_editable() && is_visible_node(node)
+        && (is<DOM::Text>(*node) || is<HTML::HTMLImageElement>(*node) || is<HTML::HTMLBRElement>(*node));
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#in-the-same-editing-host
@@ -1648,6 +2166,26 @@ bool is_in_same_editing_host(GC::Ref<DOM::Node> node_a, GC::Ref<DOM::Node> node_
     auto editing_host_a = editing_host_of_node(node_a);
     auto editing_host_b = editing_host_of_node(node_b);
     return editing_host_a && editing_host_a == editing_host_b;
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#indentation-element
+bool is_indentation_element(GC::Ref<DOM::Node> node)
+{
+    // An indentation element is either a blockquote,
+    if (!is<DOM::Element>(*node))
+        return false;
+    auto& element = static_cast<DOM::Element&>(*node);
+    if (element.local_name() == HTML::TagNames::blockquote)
+        return true;
+
+    // or a div that has a style attribute that sets "margin" or some subproperty of it.
+    auto inline_style = element.inline_style();
+    return is<HTML::HTMLDivElement>(element)
+        && element.has_attribute(HTML::AttributeNames::style)
+        && inline_style
+        && (!inline_style->margin().is_empty() || !inline_style->margin_top().is_empty()
+            || !inline_style->margin_right().is_empty() || !inline_style->margin_bottom().is_empty()
+            || !inline_style->margin_left().is_empty());
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#inline-node
@@ -1662,6 +2200,40 @@ bool is_invisible_node(GC::Ref<DOM::Node> node)
 {
     // Something is invisible if it is a node that is not visible.
     return !is_visible_node(node);
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#modifiable-element
+bool is_modifiable_element(GC::Ref<DOM::Node> node)
+{
+    // NOTE: All conditions below expect an HTML element.
+    if (!is<HTML::HTMLElement>(*node))
+        return false;
+    auto const& html_element = static_cast<HTML::HTMLElement const&>(*node);
+
+    // A modifiable element is a b, em, i, s, span, strike, strong, sub, sup, or u element with no attributes except
+    // possibly style;
+    auto has_no_attributes_except = [&](auto exclusions) {
+        auto attribute_count = 0;
+        html_element.for_each_attribute([&](DOM::Attr const& attribute) {
+            if (!exclusions.contains_slow(attribute.local_name()))
+                ++attribute_count;
+        });
+        return attribute_count == 0;
+    };
+    if (html_element.local_name().is_one_of(HTML::TagNames::b, HTML::TagNames::em, HTML::TagNames::i,
+            HTML::TagNames::s, HTML::TagNames::span, HTML::TagNames::strike, HTML::TagNames::strong,
+            HTML::TagNames::sub, HTML::TagNames::sup, HTML::TagNames::u))
+        return has_no_attributes_except(Array { HTML::AttributeNames::style });
+
+    // or a font element with no attributes except possibly style, color, face, and/or size;
+    if (is<HTML::HTMLFontElement>(html_element)) {
+        return has_no_attributes_except(Array { HTML::AttributeNames::style, HTML::AttributeNames::color,
+            HTML::AttributeNames::face, HTML::AttributeNames::size });
+    }
+
+    // or an a element with no attributes except possibly style and/or href.
+    return is<HTML::HTMLAnchorElement>(html_element)
+        && has_no_attributes_except(Array { HTML::AttributeNames::style, HTML::AttributeNames::href });
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#name-of-an-element-with-inline-contents
@@ -1720,7 +2292,7 @@ bool is_name_of_an_element_with_inline_contents(FlyString const& local_name)
 // https://w3c.github.io/editing/docs/execCommand/#non-list-single-line-container
 bool is_non_list_single_line_container(GC::Ref<DOM::Node> node)
 {
-    // A non-list single-line container is an HTML element with local name "address", "divis_", "h1", "h2", "h3", "h4",
+    // A non-list single-line container is an HTML element with local name "address", "div", "h1", "h2", "h3", "h4",
     // "h5", "h6", "listing", "p", "pre", or "xmp".
     if (!is<HTML::HTMLElement>(*node))
         return false;
@@ -1794,6 +2366,181 @@ bool is_prohibited_paragraph_child_name(FlyString const& local_name)
         HTML::TagNames::xmp);
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#removeformat-candidate
+bool is_remove_format_candidate(GC::Ref<DOM::Node> node)
+{
+    // A removeFormat candidate is an editable HTML element with local name "abbr", "acronym", "b", "bdi", "bdo", "big",
+    // "blink", "cite", "code", "dfn", "em", "font", "i", "ins", "kbd", "mark", "nobr", "q", "s", "samp", "small",
+    // "span", "strike", "strong", "sub", "sup", "tt", "u", or "var".
+    if (!node->is_editable())
+        return false;
+    if (!is<HTML::HTMLElement>(*node))
+        return false;
+    return static_cast<HTML::HTMLElement&>(*node).local_name().is_one_of(
+        HTML::TagNames::abbr,
+        HTML::TagNames::acronym,
+        HTML::TagNames::b,
+        HTML::TagNames::bdi,
+        HTML::TagNames::bdo,
+        HTML::TagNames::big,
+        HTML::TagNames::blink,
+        HTML::TagNames::cite,
+        HTML::TagNames::code,
+        HTML::TagNames::dfn,
+        HTML::TagNames::em,
+        HTML::TagNames::font,
+        HTML::TagNames::i,
+        HTML::TagNames::ins,
+        HTML::TagNames::kbd,
+        HTML::TagNames::mark,
+        HTML::TagNames::nobr,
+        HTML::TagNames::q,
+        HTML::TagNames::s,
+        HTML::TagNames::samp,
+        HTML::TagNames::small,
+        HTML::TagNames::span,
+        HTML::TagNames::strike,
+        HTML::TagNames::strong,
+        HTML::TagNames::sub,
+        HTML::TagNames::sup,
+        HTML::TagNames::tt,
+        HTML::TagNames::u,
+        HTML::TagNames::var);
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#simple-indentation-element
+bool is_simple_indentation_element(GC::Ref<DOM::Node> node)
+{
+    // A simple indentation element is an indentation element
+    if (!is_indentation_element(node))
+        return false;
+    auto const& element = static_cast<DOM::Element&>(*node);
+    auto inline_style = element.inline_style();
+
+    // that has no attributes except possibly
+    bool has_only_valid_attributes = true;
+    element.for_each_attribute([&](DOM::Attr const& attribute) {
+        // * a style attribute that sets no properties other than "margin", "border", "padding", or subproperties of
+        //   those;
+        if (attribute.local_name() == HTML::AttributeNames::style) {
+            if (!inline_style)
+                return;
+            for (auto& style_property : inline_style->properties()) {
+                switch (style_property.property_id) {
+                case CSS::PropertyID::Border:
+                case CSS::PropertyID::BorderBottom:
+                case CSS::PropertyID::BorderLeft:
+                case CSS::PropertyID::BorderRight:
+                case CSS::PropertyID::BorderTop:
+                case CSS::PropertyID::Margin:
+                case CSS::PropertyID::MarginBottom:
+                case CSS::PropertyID::MarginLeft:
+                case CSS::PropertyID::MarginRight:
+                case CSS::PropertyID::MarginTop:
+                case CSS::PropertyID::Padding:
+                case CSS::PropertyID::PaddingBottom:
+                case CSS::PropertyID::PaddingLeft:
+                case CSS::PropertyID::PaddingRight:
+                case CSS::PropertyID::PaddingTop:
+                    // Allowed
+                    break;
+                default:
+                    has_only_valid_attributes = false;
+                    return;
+                }
+            }
+        }
+
+        // * and/or a dir attribute.
+        else if (attribute.local_name() != HTML::AttributeNames::dir) {
+            has_only_valid_attributes = false;
+        }
+    });
+    return has_only_valid_attributes;
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#simple-modifiable-element
+bool is_simple_modifiable_element(GC::Ref<DOM::Node> node)
+{
+    // A simple modifiable element is an HTML element for which at least one of the following holds:
+    if (!is<HTML::HTMLElement>(*node))
+        return false;
+    auto const& html_element = static_cast<HTML::HTMLElement&>(*node);
+    auto const inline_style = html_element.inline_style();
+
+    // * It is an a, b, em, font, i, s, span, strike, strong, sub, sup, or u element with no attributes.
+    // * It is an a, b, em, font, i, s, span, strike, strong, sub, sup, or u element with exactly one attribute, which
+    //   is style, which sets no CSS properties (including invalid or unrecognized properties).
+    auto attribute_count = html_element.attribute_list_size();
+    if (html_element.local_name().is_one_of(HTML::TagNames::a, HTML::TagNames::b, HTML::TagNames::em,
+            HTML::TagNames::font, HTML::TagNames::i, HTML::TagNames::s, HTML::TagNames::span, HTML::TagNames::strike,
+            HTML::TagNames::strong, HTML::TagNames::sub, HTML::TagNames::sup, HTML::TagNames::u)) {
+        if (attribute_count == 0)
+            return true;
+
+        if (attribute_count == 1 && html_element.has_attribute(HTML::AttributeNames::style)
+            && (!inline_style || inline_style->length() == 0))
+            return true;
+    }
+
+    // NOTE: All conditions below require exactly one attribute on the element
+    if (attribute_count != 1)
+        return false;
+
+    // * It is an a element with exactly one attribute, which is href.
+    if (is<HTML::HTMLAnchorElement>(html_element)
+        && html_element.get_attribute(HTML::AttributeNames::href).has_value())
+        return true;
+
+    // * It is a font element with exactly one attribute, which is either color, face, or size.
+    if (is<HTML::HTMLFontElement>(html_element)) {
+        if (html_element.has_attribute(HTML::AttributeNames::color)
+            || html_element.has_attribute(HTML::AttributeNames::face)
+            || html_element.has_attribute(HTML::AttributeNames::size))
+            return true;
+    }
+
+    // NOTE: All conditions below require exactly one attribute which is style, that sets one CSS property.
+    if (!html_element.has_attribute(HTML::AttributeNames::style) || !inline_style || (inline_style->length() != 1))
+        return false;
+
+    // * It is a b or strong element with exactly one attribute, which is style, and the style attribute sets exactly
+    //   one CSS property (including invalid or unrecognized properties), which is "font-weight".
+    if (html_element.local_name().is_one_of(HTML::TagNames::b, HTML::TagNames::strong)
+        && inline_style->property(CSS::PropertyID::FontWeight).has_value())
+        return true;
+
+    // * It is an i or em element with exactly one attribute, which is style, and the style attribute sets exactly one
+    //   CSS property (including invalid or unrecognized properties), which is "font-style".
+    if (html_element.local_name().is_one_of(HTML::TagNames::i, HTML::TagNames::em)
+        && inline_style->property(CSS::PropertyID::FontStyle).has_value())
+        return true;
+
+    // * It is an a, font, or span element with exactly one attribute, which is style, and the style attribute sets
+    //   exactly one CSS property (including invalid or unrecognized properties), and that property is not
+    //   "text-decoration".
+    if (html_element.local_name().is_one_of(HTML::TagNames::a, HTML::TagNames::font, HTML::TagNames::span)
+        && !inline_style->property(CSS::PropertyID::TextDecoration).has_value())
+        return true;
+
+    // * It is an a, font, s, span, strike, or u element with exactly one attribute, which is style, and the style
+    //   attribute sets exactly one CSS property (including invalid or unrecognized properties), which is
+    //   "text-decoration", which is set to "line-through" or "underline" or "overline" or "none".
+    if (html_element.local_name().is_one_of(HTML::TagNames::a, HTML::TagNames::font, HTML::TagNames::s,
+            HTML::TagNames::span, HTML::TagNames::strike, HTML::TagNames::u)
+        && inline_style->property(CSS::PropertyID::TextDecoration).has_value()) {
+        auto text_decoration = inline_style->text_decoration();
+        if (first_is_one_of(text_decoration,
+                string_from_keyword(CSS::Keyword::LineThrough),
+                string_from_keyword(CSS::Keyword::Underline),
+                string_from_keyword(CSS::Keyword::Overline),
+                string_from_keyword(CSS::Keyword::None)))
+            return true;
+    }
+
+    return false;
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#single-line-container
 bool is_single_line_container(GC::Ref<DOM::Node> node)
 {
@@ -1812,13 +2559,17 @@ bool is_visible_node(GC::Ref<DOM::Node> node)
 {
     // excluding any node with an inclusive ancestor Element whose "display" property has resolved
     // value "none".
-    GC::Ptr<DOM::Node> inclusive_ancestor = node;
-    while (inclusive_ancestor) {
-        auto display = resolved_display(*inclusive_ancestor);
-        if (display.has_value() && display->is_none())
-            return false;
-        inclusive_ancestor = inclusive_ancestor->parent();
-    }
+    bool has_display_none = false;
+    node->for_each_inclusive_ancestor([&has_display_none](GC::Ref<DOM::Node> ancestor) {
+        auto display = resolved_display(ancestor);
+        if (display.has_value() && display->is_none()) {
+            has_display_none = true;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+    if (has_display_none)
+        return false;
 
     // Something is visible if it is a node that either is a block node,
     if (is_block_node(node))
@@ -1892,6 +2643,130 @@ bool is_whitespace_node(GC::Ref<DOM::Node> node)
     return false;
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#justify-the-selection
+void justify_the_selection(DOM::Document& document, JustifyAlignment alignment)
+{
+    // 1. Block-extend the active range, and let new range be the result.
+    auto new_range = block_extend_a_range(*active_range(document));
+
+    // 2. Let element list be a list of all editable Elements contained in new range that either has an attribute in the
+    //    HTML namespace whose local name is "align", or has a style attribute that sets "text-align", or is a center.
+    Vector<GC::Ref<DOM::Element>> element_list;
+    new_range->for_each_contained([&element_list](GC::Ref<DOM::Node> node) {
+        if (!node->is_editable() || !is<DOM::Element>(*node))
+            return IterationDecision::Continue;
+
+        auto& element = static_cast<DOM::Element&>(*node);
+        if (element.has_attribute_ns(Namespace::HTML, HTML::AttributeNames::align)
+            || property_in_style_attribute(element, CSS::PropertyID::TextAlign).has_value()
+            || element.local_name() == HTML::TagNames::center)
+            element_list.append(element);
+
+        return IterationDecision::Continue;
+    });
+
+    // 3. For each element in element list:
+    for (auto element : element_list) {
+        // 1. If element has an attribute in the HTML namespace whose local name is "align", remove that attribute.
+        if (element->has_attribute_ns(Namespace::HTML, HTML::AttributeNames::align))
+            element->remove_attribute_ns(Namespace::HTML, HTML::AttributeNames::align);
+
+        // 2. Unset the CSS property "text-align" on element, if it's set by a style attribute.
+        auto* inline_style = element->style_for_bindings();
+        MUST(inline_style->remove_property(CSS::PropertyID::TextAlign));
+
+        // 3. If element is a div or span or center with no attributes, remove it, preserving its descendants.
+        if (element->local_name().is_one_of(HTML::TagNames::div, HTML::TagNames::span, HTML::TagNames::center)
+            && !element->has_attributes())
+            remove_node_preserving_its_descendants(element);
+
+        // 4. If element is a center with one or more attributes, set the tag name of element to "div".
+        if (element->local_name() == HTML::TagNames::center && element->has_attributes())
+            set_the_tag_name(element, HTML::TagNames::div);
+    }
+
+    // 4. Block-extend the active range, and let new range be the result.
+    new_range = block_extend_a_range(*active_range(document));
+
+    // 5. Let node list be a list of nodes, initially empty.
+    Vector<GC::Ref<DOM::Node>> node_list;
+
+    // 6. For each node node contained in new range, append node to node list if the last member of node list (if any)
+    //    is not an ancestor of node; node is editable; node is an allowed child of "div"; and node's alignment value is
+    //    not alignment.
+    new_range->for_each_contained([&](GC::Ref<DOM::Node> node) {
+        if ((node_list.is_empty() || !node_list.last()->is_ancestor_of(node))
+            && node->is_editable()
+            && is_allowed_child_of_node(node, HTML::TagNames::div)
+            && alignment_value_of_node(node) != alignment)
+            node_list.append(node);
+        return IterationDecision::Continue;
+    });
+
+    // 7. While node list is not empty:
+    while (!node_list.is_empty()) {
+        // 1. Let sublist be a list of nodes, initially empty.
+        Vector<GC::Ref<DOM::Node>> sublist;
+
+        // 2. Remove the first member of node list and append it to sublist.
+        sublist.append(node_list.take_first());
+
+        // 3. While node list is not empty, and the first member of node list is the nextSibling of the last member of
+        //    sublist, remove the first member of node list and append it to sublist.
+        while (!node_list.is_empty() && node_list.first().ptr() == sublist.last()->next_sibling())
+            sublist.append(node_list.take_first());
+
+        // 4. Wrap sublist. Sibling criteria returns true for any div that has one or both of the following two
+        //    attributes and no other attributes, and false otherwise:
+        //    * An align attribute whose value is an ASCII case-insensitive match for alignment.
+        //    * A style attribute which sets exactly one CSS property (including unrecognized or invalid attributes),
+        //      which is "text-align", which is set to alignment.
+        //
+        //    New parent instructions are to call createElement("div") on the context object, then set its CSS property
+        //    "text-align" to alignment and return the result.
+        auto alignment_keyword = string_from_keyword([&alignment] {
+            switch (alignment) {
+            case JustifyAlignment::Center:
+                return CSS::Keyword::Center;
+            case JustifyAlignment::Justify:
+                return CSS::Keyword::Justify;
+            case JustifyAlignment::Left:
+                return CSS::Keyword::Left;
+            case JustifyAlignment::Right:
+                return CSS::Keyword::Right;
+            }
+            VERIFY_NOT_REACHED();
+        }());
+
+        wrap(
+            sublist,
+            [&](GC::Ref<DOM::Node> sibling) {
+                if (!is<HTML::HTMLDivElement>(*sibling))
+                    return false;
+                GC::Ref<DOM::Element> element = static_cast<DOM::Element&>(*sibling);
+                u8 number_of_matching_attributes = 0;
+                if (element->get_attribute_value(HTML::AttributeNames::align).equals_ignoring_ascii_case(alignment_keyword))
+                    ++number_of_matching_attributes;
+                if (element->has_attribute(HTML::AttributeNames::style) && element->inline_style()
+                    && element->inline_style()->length() == 1) {
+                    auto text_align = element->inline_style()->property(CSS::PropertyID::TextAlign);
+                    if (text_align.has_value()) {
+                        auto align_value = text_align.value().value->to_string(CSS::CSSStyleValue::SerializationMode::Normal);
+                        if (align_value.equals_ignoring_ascii_case(alignment_keyword))
+                            ++number_of_matching_attributes;
+                    }
+                }
+                return element->attribute_list_size() == number_of_matching_attributes;
+            },
+            [&] {
+                auto div = MUST(DOM::create_element(document, HTML::TagNames::div, Namespace::HTML));
+                auto inline_style = div->style_for_bindings();
+                MUST(inline_style->set_property(CSS::PropertyID::TextAlign, alignment_keyword));
+                return div;
+            });
+    }
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#last-equivalent-point
 DOM::BoundaryPoint last_equivalent_point(DOM::BoundaryPoint boundary_point)
 {
@@ -1907,6 +2782,37 @@ DOM::BoundaryPoint last_equivalent_point(DOM::BoundaryPoint boundary_point)
     return boundary_point;
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#legacy-font-size-for
+String legacy_font_size(int pixel_size)
+{
+    // 1. Let returned size be 1.
+    auto returned_size = 1;
+
+    // 2. While returned size is less than 7:
+    while (returned_size < 7) {
+        // 1. Let lower bound be the resolved value of "font-size" in pixels of a font element whose size attribute is
+        //    set to returned size.
+        auto lower_bound = font_size_to_pixel_size(MUST(String::formatted("{}", returned_size))).to_float();
+
+        // 2. Let upper bound be the resolved value of "font-size" in pixels of a font element whose size attribute is
+        //    set to one plus returned size.
+        auto upper_bound = font_size_to_pixel_size(MUST(String::formatted("{}", returned_size + 1))).to_float();
+
+        // 3. Let average be the average of upper bound and lower bound.
+        auto average = (lower_bound + upper_bound) / 2;
+
+        // 4. If pixel size is less than average, return the one-code unit string consisting of the digit returned size.
+        if (pixel_size < average)
+            return MUST(String::formatted("{}", returned_size));
+
+        // 5. Add one to returned size.
+        ++returned_size;
+    }
+
+    // 3. Return "7".
+    return "7"_string;
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#preserving-ranges
 void move_node_preserving_ranges(GC::Ref<DOM::Node> node, GC::Ref<DOM::Node> new_parent, u32 new_index)
 {
@@ -1914,30 +2820,63 @@ void move_node_preserving_ranges(GC::Ref<DOM::Node> node, GC::Ref<DOM::Node> new
     // (if any), then insert it in the new location. In doing so, follow these rules instead of
     // those defined by the insert and remove algorithms:
 
-    // FIXME: Currently this is a simple range-destroying move. Implement "follow these rules" as
-    //        described above.
+    // AD-HOC: We implement this spec by taking note of the current active range (if any), performing the remove and
+    //         insertion of node, and then restoring the range after performing any necessary adjustments.
+    Optional<DOM::BoundaryPoint> start;
+    Optional<DOM::BoundaryPoint> end;
+
+    auto range = active_range(node->document());
+    if (range) {
+        start = range->start();
+        end = range->end();
+    }
 
     // 1. Let node be the moved node, old parent and old index be the old parent (which may be null)
     //    and index, and new parent and new index be the new parent and index.
     auto* old_parent = node->parent();
-    [[maybe_unused]] auto old_index = node->index();
+    auto old_index = node->index();
     if (old_parent)
         node->remove();
 
     auto* new_next_sibling = new_parent->child_at_index(new_index);
     new_parent->insert_before(node, new_next_sibling);
 
-    // FIXME: 2. If a boundary point's node is the same as or a descendant of node, leave it unchanged, so
+    // AD-HOC: Return early if there was no active range
+    if (!range)
+        return;
+
+    // 2. If a boundary point's node is the same as or a descendant of node, leave it unchanged, so
     //    it moves to the new location.
+    // NOTE: This step exists for completeness.
 
-    // FIXME: 3. If a boundary point's node is new parent and its offset is greater than new index, add one
+    // 3. If a boundary point's node is new parent and its offset is greater than new index, add one
     //    to its offset.
+    if (start->node == new_parent && start->offset > new_index)
+        start->offset++;
+    if (end->node == new_parent && end->offset > new_index)
+        end->offset++;
 
-    // FIXME: 4. If a boundary point's node is old parent and its offset is old index or old index + 1, set
+    // 4. If a boundary point's node is old parent and its offset is old index or old index + 1, set
     //    its node to new parent and add new index − old index to its offset.
+    if (start->node == old_parent && (start->offset == old_index || start->offset == old_index + 1)) {
+        start->node = new_parent;
+        start->offset += new_index - old_index;
+    }
+    if (end->node == old_parent && (end->offset == old_index || end->offset == old_index + 1)) {
+        end->node = new_parent;
+        end->offset += new_index - old_index;
+    }
 
-    // FIXME: 5. If a boundary point's node is old parent and its offset is greater than old index + 1,
+    // 5. If a boundary point's node is old parent and its offset is greater than old index + 1,
     //    subtract one from its offset.
+    if (start->node == old_parent && start->offset > old_index + 1)
+        start->offset--;
+    if (end->node == old_parent && end->offset > old_index + 1)
+        end->offset--;
+
+    // AD-HOC: Set the new active range
+    MUST(range->set_start(start->node, start->offset));
+    MUST(range->set_end(end->node, end->offset));
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#next-equivalent-point
@@ -1965,15 +2904,15 @@ Optional<DOM::BoundaryPoint> next_equivalent_point(DOM::BoundaryPoint boundary_p
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#normalize-sublists
-void normalize_sublists_in_node(GC::Ref<DOM::Element> item)
+void normalize_sublists_in_node(GC::Ref<DOM::Node> item)
 {
     // 1. If item is not an li or it is not editable or its parent is not editable, abort these
     //    steps.
-    if (item->local_name() != HTML::TagNames::li || !item->is_editable() || !item->parent()->is_editable())
+    if (!is<HTML::HTMLLIElement>(*item) || !item->is_editable() || !item->parent()->is_editable())
         return;
 
     // 2. Let new item be null.
-    GC::Ptr<DOM::Element> new_item;
+    GC::Ptr<DOM::Node> new_item;
 
     // 3. While item has an ol or ul child:
     while (item->has_child_of_type<HTML::HTMLOListElement>() || item->has_child_of_type<HTML::HTMLUListElement>()) {
@@ -2008,6 +2947,168 @@ void normalize_sublists_in_node(GC::Ref<DOM::Element> item)
             move_node_preserving_ranges(child, *new_item, 0);
         }
     }
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#outdent
+void outdent(GC::Ref<DOM::Node> node)
+{
+    // 1. If node is not editable, abort these steps.
+    if (!node->is_editable())
+        return;
+
+    // 2. If node is a simple indentation element, remove node, preserving its descendants. Then abort these steps.
+    if (is_simple_indentation_element(node)) {
+        remove_node_preserving_its_descendants(node);
+        return;
+    }
+
+    // 3. If node is an indentation element:
+    if (is_indentation_element(node)) {
+        // 1. Unset the dir attribute of node, if any.
+        auto& element = static_cast<DOM::Element&>(*node);
+        element.remove_attribute(HTML::AttributeNames::dir);
+
+        // 2. Unset the margin, padding, and border CSS properties of node.
+        if (auto inline_style = element.inline_style()) {
+            MUST(inline_style->remove_property(CSS::string_from_property_id(CSS::PropertyID::Border)));
+            MUST(inline_style->remove_property(CSS::string_from_property_id(CSS::PropertyID::Margin)));
+            MUST(inline_style->remove_property(CSS::string_from_property_id(CSS::PropertyID::Padding)));
+        }
+
+        // 3. Set the tag name of node to "div".
+        set_the_tag_name(element, HTML::TagNames::div);
+
+        // 4. Abort these steps.
+        return;
+    }
+
+    // 4. Let current ancestor be node's parent.
+    GC::Ptr<DOM::Node> current_ancestor = node->parent();
+
+    // 5. Let ancestor list be a list of nodes, initially empty.
+    Vector<GC::Ref<DOM::Node>> ancestor_list;
+
+    // 6. While current ancestor is an editable Element that is neither a simple indentation element nor an ol nor a ul,
+    //    append current ancestor to ancestor list and then set current ancestor to its parent.
+    while (is<DOM::Element>(current_ancestor.ptr())
+        && current_ancestor->is_editable()
+        && !is_simple_indentation_element(*current_ancestor)
+        && !is<HTML::HTMLOListElement>(*current_ancestor)
+        && !is<HTML::HTMLUListElement>(*current_ancestor)) {
+        ancestor_list.append(*current_ancestor);
+        current_ancestor = current_ancestor->parent();
+    }
+
+    // 7. If current ancestor is not an editable simple indentation element:
+    if (!current_ancestor || !current_ancestor->is_editable() || !is_simple_indentation_element(*current_ancestor)) {
+        // 1. Let current ancestor be node's parent.
+        current_ancestor = node->parent();
+
+        // 2. Let ancestor list be the empty list.
+        ancestor_list.clear_with_capacity();
+
+        // 3. While current ancestor is an editable Element that is neither an indentation element nor an ol nor a ul,
+        //    append current ancestor to ancestor list and then set current ancestor to its parent.
+        while (is<DOM::Element>(current_ancestor.ptr())
+            && current_ancestor->is_editable()
+            && !is_indentation_element(*current_ancestor)
+            && !is<HTML::HTMLOListElement>(*current_ancestor)
+            && !is<HTML::HTMLUListElement>(*current_ancestor)) {
+            ancestor_list.append(*current_ancestor);
+            current_ancestor = current_ancestor->parent();
+        }
+    }
+
+    // 8. If node is an ol or ul and current ancestor is not an editable indentation element:
+    if ((is<HTML::HTMLOListElement>(*node) || is<HTML::HTMLUListElement>(*node))
+        && !(current_ancestor->is_editable() && is_indentation_element(*current_ancestor))) {
+        // 1. Unset the reversed, start, and type attributes of node, if any are set.
+        auto& node_element = static_cast<DOM::Element&>(*node);
+        node_element.remove_attribute(HTML::AttributeNames::reversed);
+        node_element.remove_attribute(HTML::AttributeNames::start);
+        node_element.remove_attribute(HTML::AttributeNames::type);
+
+        // 2. Let children be the children of node.
+        Vector<GC::Ref<DOM::Node>> children;
+        for (auto* child = node->first_child(); child; child = child->next_sibling())
+            children.append(*child);
+
+        // 3. If node has attributes, and its parent is not an ol or ul, set the tag name of node to "div".
+        if (node_element.has_attributes() && !is<HTML::HTMLOListElement>(node->parent())
+            && !is<HTML::HTMLUListElement>(node->parent())) {
+            set_the_tag_name(node_element, HTML::TagNames::div);
+        }
+
+        // 4. Otherwise:
+        else {
+            // 1. Record the values of node's children, and let values be the result.
+            auto values = record_the_values_of_nodes(children);
+
+            // 2. Remove node, preserving its descendants.
+            remove_node_preserving_its_descendants(node);
+
+            // 3. Restore the values from values.
+            restore_the_values_of_nodes(values);
+        }
+
+        // 5. Fix disallowed ancestors of each member of children.
+        for (auto child : children)
+            fix_disallowed_ancestors_of_node(*child);
+
+        // 6. Abort these steps.
+        return;
+    }
+
+    // 9. If current ancestor is not an editable indentation element, abort these steps.
+    if (!current_ancestor || !current_ancestor->is_editable() || !is_indentation_element(*current_ancestor))
+        return;
+
+    // 10. Append current ancestor to ancestor list.
+    ancestor_list.append(*current_ancestor);
+
+    // 11. Let original ancestor be current ancestor.
+    auto original_ancestor = current_ancestor;
+
+    // 12. While ancestor list is not empty:
+    while (!ancestor_list.is_empty()) {
+        // 1. Let current ancestor be the last member of ancestor list.
+        // 2. Remove the last member from ancestor list.
+        current_ancestor = ancestor_list.take_last();
+
+        // 3. Let target be the child of current ancestor that is equal to either node or the last member of ancestor
+        //    list.
+        GC::Ptr<DOM::Node> target;
+        for (auto* child = current_ancestor->first_child(); child; child = child->next_sibling()) {
+            if (child == node.ptr() || (!ancestor_list.is_empty() && child == ancestor_list.last().ptr())) {
+                target = child;
+                break;
+            }
+        }
+        VERIFY(target);
+
+        // 4. If target is an inline node that is not a br, and its nextSibling is a br, remove target's nextSibling
+        //    from its parent.
+        if (is_inline_node(*target) && !is<HTML::HTMLBRElement>(*target) && is<HTML::HTMLBRElement>(target->next_sibling()))
+            target->next_sibling()->remove();
+
+        // 5. Let preceding siblings be the precedings siblings of target, and let following siblings be the followings
+        //    siblings of target.
+        Vector<GC::Ref<DOM::Node>> preceding_siblings;
+        for (auto* sibling = target->previous_sibling(); sibling; sibling = sibling->previous_sibling())
+            preceding_siblings.append(*sibling);
+        Vector<GC::Ref<DOM::Node>> following_siblings;
+        for (auto* sibling = target->next_sibling(); sibling; sibling = sibling->next_sibling())
+            following_siblings.append(*sibling);
+
+        // 6. Indent preceding siblings.
+        indent(preceding_siblings);
+
+        // 7. Indent following siblings.
+        indent(following_siblings);
+    }
+
+    // 13. Outdent original ancestor.
+    outdent(*original_ancestor);
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#precedes-a-line-break
@@ -2065,22 +3166,135 @@ Optional<DOM::BoundaryPoint> previous_equivalent_point(DOM::BoundaryPoint bounda
     return {};
 }
 
+// https://w3c.github.io/editing/docs/execCommand/#push-down-values
+void push_down_values(FlyString const& command, GC::Ref<DOM::Node> node, Optional<String> new_value)
+{
+    // 1. Let command be the current command.
+
+    // 2. If node's parent is not an Element, abort this algorithm.
+    if (!is<DOM::Element>(node->parent()))
+        return;
+
+    // 3. If the effective command value of command is loosely equivalent to new value on node, abort this algorithm.
+    if (values_are_loosely_equivalent(command, effective_command_value(node, command), new_value))
+        return;
+
+    // 4. Let current ancestor be node's parent.
+    auto current_ancestor = GC::Ptr { node->parent() };
+
+    // 5. Let ancestor list be a list of nodes, initially empty.
+    Vector<GC::Ref<DOM::Node>> ancestor_list;
+
+    // 6. While current ancestor is an editable Element and the effective command value of command is not loosely
+    //    equivalent to new value on it, append current ancestor to ancestor list, then set current ancestor to its
+    //    parent.
+    while (is<DOM::Element>(current_ancestor.ptr()) && current_ancestor->is_editable()
+        && !values_are_loosely_equivalent(command, effective_command_value(current_ancestor, command), new_value)) {
+        ancestor_list.append(*current_ancestor);
+        current_ancestor = current_ancestor->parent();
+    }
+
+    // 7. If ancestor list is empty, abort this algorithm.
+    if (ancestor_list.is_empty())
+        return;
+
+    // 8. Let propagated value be the specified command value of command on the last member of ancestor list.
+    auto propagated_value = specified_command_value(static_cast<DOM::Element&>(*ancestor_list.last()), command);
+
+    // 9. If propagated value is null and is not equal to new value, abort this algorithm.
+    if (!propagated_value.has_value() && new_value.has_value())
+        return;
+
+    // 10. If the effective command value of command is not loosely equivalent to new value on the parent of the last
+    //     member of ancestor list, and new value is not null, abort this algorithm.
+    if (new_value.has_value() && ancestor_list.last()->parent()
+        && !values_are_loosely_equivalent(command, effective_command_value(ancestor_list.last()->parent(), command), new_value))
+        return;
+
+    // 11. While ancestor list is not empty:
+    while (!ancestor_list.is_empty()) {
+        // 1. Let current ancestor be the last member of ancestor list.
+        // 2. Remove the last member from ancestor list.
+        current_ancestor = ancestor_list.take_last();
+
+        // 3. If the specified command value of current ancestor for command is not null, set propagated value to that
+        //    value.
+        // NOTE: Step 6 above guarantees that current_ancestor is an Element.
+        auto command_value = specified_command_value(static_cast<DOM::Element&>(*current_ancestor), command);
+        if (command_value.has_value())
+            propagated_value = command_value.value();
+
+        // 4. Let children be the children of current ancestor.
+        auto children = current_ancestor->children_as_vector();
+
+        // 5. If the specified command value of current ancestor for command is not null, clear the value of current
+        //    ancestor.
+        if (command_value.has_value())
+            clear_the_value(command, static_cast<DOM::Element&>(*current_ancestor));
+
+        // 6. For every child in children:
+        for (auto const& child : children) {
+            // 1. If child is node, continue with the next child.
+            if (child.ptr() == node.ptr())
+                continue;
+
+            // 2. If child is an Element whose specified command value for command is neither null nor equivalent to
+            //    propagated value, continue with the next child.
+            if (is<DOM::Element>(*child)) {
+                auto child_command_value = specified_command_value(static_cast<DOM::Element&>(*child), command);
+                if (child_command_value.has_value() && child_command_value != propagated_value)
+                    continue;
+            }
+
+            // 3. If child is the last member of ancestor list, continue with the next child.
+            if (!ancestor_list.is_empty() && child.ptr() == ancestor_list.last().ptr())
+                continue;
+
+            // 4. Force the value of child, with command as in this algorithm and new value equal to propagated value.
+            force_the_value(*child, command, propagated_value);
+        }
+    }
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#record-current-overrides
+Vector<RecordedOverride> record_current_overrides(DOM::Document const& document)
+{
+    // 1. Let overrides be a list of (string, string or boolean) ordered pairs, initially empty.
+    Vector<RecordedOverride> overrides;
+
+    // 2. If there is a value override for "createLink", add ("createLink", value override for "createLink") to
+    //    overrides.
+    if (auto override = document.command_value_override(CommandNames::createLink); override.has_value())
+        overrides.empend(CommandNames::createLink, override.release_value());
+
+    // 3. For each command in the list "bold", "italic", "strikethrough", "subscript", "superscript", "underline", in
+    //    order: if there is a state override for command, add (command, command's state override) to overrides.
+    for (auto const& command : { CommandNames::bold, CommandNames::italic, CommandNames::strikethrough,
+             CommandNames::subscript, CommandNames::superscript, CommandNames::underline }) {
+        if (auto override = document.command_state_override(command); override.has_value())
+            overrides.empend(command, override.release_value());
+    }
+
+    // 4. For each command in the list "fontName", "fontSize", "foreColor", "hiliteColor", in order: if there is a value
+    //    override for command, add (command, command's value override) to overrides.
+    for (auto const& command : { CommandNames::fontName, CommandNames::fontSize, CommandNames::foreColor,
+             CommandNames::hiliteColor }) {
+        if (auto override = document.command_value_override(command); override.has_value())
+            overrides.empend(command, override.release_value());
+    }
+
+    // 5. Return overrides.
+    return overrides;
+}
+
 // https://w3c.github.io/editing/docs/execCommand/#record-current-states-and-values
-Vector<RecordedOverride> record_current_states_and_values(GC::Ref<DOM::Range> active_range)
+Vector<RecordedOverride> record_current_states_and_values(DOM::Document const& document)
 {
     // 1. Let overrides be a list of (string, string or boolean) ordered pairs, initially empty.
     Vector<RecordedOverride> overrides;
 
     // 2. Let node be the first formattable node effectively contained in the active range, or null if there is none.
-    GC::Ptr<DOM::Node> node;
-    auto common_ancestor = active_range->common_ancestor_container();
-    common_ancestor->for_each_in_subtree([&](GC::Ref<DOM::Node> descendant) {
-        if (is_formattable_node(descendant) && is_effectively_contained_in_range(descendant, active_range)) {
-            node = descendant;
-            return TraversalDecision::Break;
-        }
-        return TraversalDecision::Continue;
-    });
+    auto node = first_formattable_node_effectively_contained(active_range(document));
 
     // 3. If node is null, return overrides.
     if (!node)
@@ -2227,14 +3441,13 @@ void remove_extraneous_line_breaks_from_a_node(GC::Ref<DOM::Node> node)
 // https://w3c.github.io/editing/docs/execCommand/#preserving-its-descendants
 void remove_node_preserving_its_descendants(GC::Ref<DOM::Node> node)
 {
-    // To remove a node node while preserving its descendants, split the parent of node's children
-    // if it has any.
-    if (node->child_count() > 0) {
+    // To remove a node node while preserving its descendants, split the parent of node's children if it has any.
+    if (node->has_children()) {
         Vector<GC::Ref<DOM::Node>> children;
         children.ensure_capacity(node->child_count());
         for (auto* child = node->first_child(); child; child = child->next_sibling())
             children.append(*child);
-        split_the_parent_of_nodes(move(children));
+        split_the_parent_of_nodes(children);
         return;
     }
 
@@ -2242,45 +3455,121 @@ void remove_node_preserving_its_descendants(GC::Ref<DOM::Node> node)
     node->remove();
 }
 
-// https://w3c.github.io/editing/docs/execCommand/#restore-states-and-values
-void restore_states_and_values(GC::Ref<DOM::Range>, Vector<RecordedOverride> const& overrides)
+// https://w3c.github.io/editing/docs/execCommand/#reorder-modifiable-descendants
+void reorder_modifiable_descendants(GC::Ref<DOM::Node> node, FlyString const& command, Optional<String> new_value)
 {
-    // FIXME: 1. Let node be the first formattable node effectively contained in the active range, or null if there is none.
+    // 1. Let candidate equal node.
+    GC::Ptr<DOM::Node> candidate = node;
 
-    // FIXME: 2. If node is not null, then for each (command, override) pair in overrides, in order:
-    {
-        // FIXME: 1. If override is a boolean, and queryCommandState(command) returns something different from override, take
-        //    the action for command, with value equal to the empty string.
+    // 2. While candidate is a modifiable element, and candidate has exactly one child, and that child is also a
+    //    modifiable element, and candidate is not a simple modifiable element or candidate's specified command value
+    //    for command is not equivalent to new value, set candidate to its child.
+    while (is_modifiable_element(*candidate) && candidate->child_count() == 1
+        && is_modifiable_element(*candidate->first_child())
+        && (!is_simple_modifiable_element(*candidate)
+            || specified_command_value(static_cast<DOM::Element&>(*candidate), command) != new_value)) {
+        candidate = candidate->first_child();
+    }
 
-        // FIXME: 2. Otherwise, if override is a string, and command is neither "createLink" nor "fontSize", and
-        //    queryCommandValue(command) returns something not equivalent to override, take the action for command, with
-        //    value equal to override.
+    // 3. If candidate is node, or is not a simple modifiable element, or its specified command value is not equivalent
+    //    to new value, or its effective command value is not loosely equivalent to new value, abort these steps.
+    if (candidate == node
+        || !is_simple_modifiable_element(*candidate)
+        || specified_command_value(static_cast<DOM::Element&>(*candidate), command) != new_value
+        || !values_are_loosely_equivalent(CommandNames::createLink, effective_command_value(candidate, command), new_value))
+        return;
 
-        // FIXME: 3. Otherwise, if override is a string; and command is "createLink"; and either there is a value override for
-        //    "createLink" that is not equal to override, or there is no value override for "createLink" and node's
-        //    effective command value for "createLink" is not equal to override: take the action for "createLink", with
-        //    value equal to override.
+    // 4. While candidate has children, insert the first child of candidate into candidate's parent immediately before
+    //    candidate, preserving ranges.
+    while (candidate->has_children())
+        move_node_preserving_ranges(*candidate->first_child(), *candidate->parent(), candidate->index());
 
-        // FIXME: 4. Otherwise, if override is a string; and command is "fontSize"; and either there is a value override for
-        //    "fontSize" that is not equal to override, or there is no value override for "fontSize" and node's
-        //     effective command value for "fontSize" is not loosely equivalent to override:
-        {
-            // FIXME: 1. Convert override to an integer number of pixels, and set override to the legacy font size for the
-            //    result.
+    // 5. Insert candidate into node's parent immediately after node.
+    if (node->next_sibling())
+        node->parent()->insert_before(*candidate, node->next_sibling());
+    else
+        MUST(node->parent()->append_child(*candidate));
 
-            // FIXME: 2. Take the action for "fontSize", with value equal to override.
+    // 6. Append the node as the last child of candidate, preserving ranges.
+    move_node_preserving_ranges(node, *candidate, candidate->child_count());
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#restore-states-and-values
+void restore_states_and_values(DOM::Document& document, Vector<RecordedOverride> const& overrides)
+{
+    // 1. Let node be the first formattable node effectively contained in the active range, or null if there is none.
+    auto node = first_formattable_node_effectively_contained(active_range(document));
+
+    // 2. If node is not null,
+    if (node) {
+        // then for each (command, override) pair in overrides, in order:
+        for (auto override : overrides) {
+            // 1. If override is a boolean, and queryCommandState(command) returns something different from override,
+            //    take the action for command, with value equal to the empty string.
+            if (override.value.has<bool>() && document.query_command_state(override.command) != override.value.get<bool>()) {
+                take_the_action_for_command(document, override.command, {});
+            }
+
+            // 2. Otherwise, if override is a string, and command is neither "createLink" nor "fontSize", and
+            //    queryCommandValue(command) returns something not equivalent to override, take the action for command,
+            //    with value equal to override.
+            else if (override.value.has<String>() && !override.command.is_one_of(CommandNames::createLink, CommandNames::fontSize)
+                && document.query_command_value(override.command) != override.value.get<String>()) {
+                take_the_action_for_command(document, override.command, override.value.get<String>());
+            }
+
+            // 3. Otherwise, if override is a string; and command is "createLink"; and either there is a value override
+            //    for "createLink" that is not equal to override, or there is no value override for "createLink" and
+            //    node's effective command value for "createLink" is not equal to override: take the action for
+            //    "createLink", with value equal to override.
+            else if (auto value_override = document.command_value_override(CommandNames::createLink);
+                override.value.has<String>() && override.command == CommandNames::createLink
+                && ((value_override.has_value() && value_override.value() != override.value.get<String>())
+                    || (!value_override.has_value()
+                        && effective_command_value(node, CommandNames::createLink) != override.value.get<String>()))) {
+                take_the_action_for_command(document, CommandNames::createLink, override.value.get<String>());
+            }
+
+            // 4. Otherwise, if override is a string; and command is "fontSize"; and either there is a value override
+            //    for "fontSize" that is not equal to override, or there is no value override for "fontSize" and node's
+            //    effective command value for "fontSize" is not loosely equivalent to override:
+            else if (auto value_override = document.command_value_override(CommandNames::fontSize);
+                override.value.has<String>() && override.command == CommandNames::fontSize
+                && ((value_override.has_value() && value_override.value() != override.value.get<String>())
+                    || (!value_override.has_value()
+                        && !values_are_loosely_equivalent(
+                            CommandNames::fontSize,
+                            effective_command_value(node, CommandNames::fontSize),
+                            override.value.get<String>())))) {
+                // 1. Convert override to an integer number of pixels, and set override to the legacy font size for the
+                //    result.
+                auto override_pixel_size = font_size_to_pixel_size(override.value.get<String>());
+                override.value = legacy_font_size(override_pixel_size.to_int());
+
+                // 2. Take the action for "fontSize", with value equal to override.
+                take_the_action_for_command(document, CommandNames::fontSize, override.value.get<String>());
+            }
+
+            // 5. Otherwise, continue this loop from the beginning.
+            else {
+                continue;
+            }
+
+            // 6. Set node to the first formattable node effectively contained in the active range, if there is one.
+            if (auto new_formattable_node = first_formattable_node_effectively_contained(active_range(document)))
+                node = new_formattable_node;
         }
-
-        // FIXME: 5. Otherwise, continue this loop from the beginning.
-
-        // FIXME: 6. Set node to the first formattable node effectively contained in the active range, if there is one.
     }
 
     // 3. Otherwise, for each (command, override) pair in overrides, in order:
-    for ([[maybe_unused]] auto const& override : overrides) {
-        // FIXME: 1. If override is a boolean, set the state override for command to override.
-
-        // FIXME: 2. If override is a string, set the value override for command to override.
+    else {
+        for (auto const& override : overrides) {
+            // 1. If override is a boolean, set the state override for command to override.
+            // 2. If override is a string, set the value override for command to override.
+            override.value.visit(
+                [&](bool value) { document.set_command_state_override(override.command, value); },
+                [&](String const& value) { document.set_command_value_override(override.command, value); });
+        }
     }
 }
 
@@ -2289,23 +3578,241 @@ void restore_the_values_of_nodes(Vector<RecordedNodeValue> const& values)
 {
     // 1. For each (node, command, value) triple in values:
     for (auto& recorded_node_value : values) {
+        auto node = recorded_node_value.node;
+        auto const& command = recorded_node_value.command;
+        auto value = recorded_node_value.specified_command_value;
+
         // 1. Let ancestor equal node.
-        GC::Ptr<DOM::Node> ancestor = recorded_node_value.node;
+        GC::Ptr<DOM::Node> ancestor = node;
 
         // 2. If ancestor is not an Element, set it to its parent.
         if (!is<DOM::Element>(*ancestor))
             ancestor = ancestor->parent();
 
         // 3. While ancestor is an Element and its specified command value for command is null, set it to its parent.
-        auto const& command = recorded_node_value.command;
         while (is<DOM::Element>(ancestor.ptr()) && !specified_command_value(static_cast<DOM::Element&>(*ancestor), command).has_value())
             ancestor = ancestor->parent();
 
-        // FIXME: 4. If value is null and ancestor is an Element, push down values on node for command, with new value null.
+        // 4. If value is null and ancestor is an Element, push down values on node for command, with new value null.
+        if (!value.has_value() && is<DOM::Element>(ancestor.ptr())) {
+            push_down_values(command, node, {});
+        }
 
-        // FIXME: 5. Otherwise, if ancestor is an Element and its specified command value for command is not equivalent to
+        // 5. Otherwise, if ancestor is an Element and its specified command value for command is not equivalent to
         //    value, or if ancestor is not an Element and value is not null, force the value of command to value on
         //    node.
+        else if ((is<DOM::Element>(ancestor.ptr()) && specified_command_value(static_cast<DOM::Element&>(*ancestor), command) != value)
+            || (!is<DOM::Element>(ancestor.ptr()) && value.has_value())) {
+            force_the_value(node, command, value);
+        }
+    }
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#selection's-list-state
+SelectionsListState selections_list_state(DOM::Document const& document)
+{
+    // 1. If the active range is null, return "none".
+    auto range = active_range(document);
+    if (!range)
+        return SelectionsListState::None;
+
+    // 2. Block-extend the active range, and let new range be the result.
+    auto new_range = block_extend_a_range(*range);
+
+    // 3. Let node list be a list of nodes, initially empty.
+    Vector<GC::Ref<DOM::Node>> node_list;
+
+    // 4. For each node contained in new range, append node to node list if the last member of node list (if any) is not
+    //    an ancestor of node; node is editable; node is not an indentation element; and node is either an ol or ul, or
+    //    the child of an ol or ul, or an allowed child of "li".
+    new_range->for_each_contained([&node_list](GC::Ref<DOM::Node> node) {
+        if ((node_list.is_empty() || !node_list.last()->is_ancestor_of(node))
+            && node->is_editable()
+            && !is_indentation_element(node)
+            && ((is<HTML::HTMLOListElement>(*node) || is<HTML::HTMLUListElement>(*node))
+                || (is<HTML::HTMLOListElement>(node->parent()) || is<HTML::HTMLUListElement>(node->parent()))
+                || is_allowed_child_of_node(node, HTML::TagNames::li)))
+            node_list.append(node);
+        return IterationDecision::Continue;
+    });
+
+    // 5. If node list is empty, return "none".
+    if (node_list.is_empty())
+        return SelectionsListState::None;
+
+    // 6. If every member of node list is either an ol or the child of an ol or the child of an li child of an ol, and
+    //    none is a ul or an ancestor of a ul, return "ol".
+    auto is_ancestor_of_type = []<typename T>(GC::Ref<DOM::Node> node) {
+        bool has_type = false;
+        node->for_each_in_subtree([&has_type](GC::Ref<DOM::Node> descendant) {
+            if (is<T>(*descendant)) {
+                has_type = true;
+                return TraversalDecision::Break;
+            }
+            return TraversalDecision::Continue;
+        });
+        return has_type;
+    };
+    auto is_type_or_child_of_list_type = []<typename T>(GC::Ref<DOM::Node> node) {
+        return is<T>(*node) || is<T>(node->parent())
+            || (is<HTML::HTMLLIElement>(node->parent()) && is<T>(node->parent()->parent()));
+    };
+    auto is_type_or_child_or_ancestor_of_list_type = [&]<typename T>(GC::Ref<DOM::Node> node) {
+        return is_type_or_child_of_list_type.operator()<T>(node) || is_ancestor_of_type.operator()<T>(node);
+    };
+
+    bool all_is_an_ol = true;
+    bool none_is_a_ul = true;
+    for (auto node : node_list) {
+        if (!is_type_or_child_of_list_type.operator()<HTML::HTMLOListElement>(*node)) {
+            all_is_an_ol = false;
+            break;
+        }
+        if (is<HTML::HTMLUListElement>(*node) || is_ancestor_of_type.operator()<HTML::HTMLUListElement>(node)) {
+            none_is_a_ul = false;
+            break;
+        }
+    }
+    if (all_is_an_ol && none_is_a_ul)
+        return SelectionsListState::Ol;
+
+    // 7. If every member of node list is either a ul or the child of a ul or the child of an li child of a ul, and none
+    //    is an ol or an ancestor of an ol, return "ul".
+    bool all_is_a_ul = true;
+    bool none_is_an_ol = true;
+    for (auto node : node_list) {
+        if (!is_type_or_child_of_list_type.operator()<HTML::HTMLUListElement>(*node)) {
+            all_is_a_ul = false;
+            break;
+        }
+        if (is<HTML::HTMLOListElement>(*node) || is_ancestor_of_type.operator()<HTML::HTMLOListElement>(node)) {
+            none_is_an_ol = false;
+            break;
+        }
+    }
+    if (all_is_a_ul && none_is_an_ol)
+        return SelectionsListState::Ul;
+
+    // 8. If some member of node list is either an ol or the child or ancestor of an ol or the child of an li child of
+    //    an ol, and some member of node list is either a ul or the child or ancestor of a ul or the child of an li
+    //    child of a ul, return "mixed".
+    bool any_is_ol = false;
+    bool any_is_ul = false;
+    for (auto node : node_list) {
+        if (is_type_or_child_or_ancestor_of_list_type.operator()<HTML::HTMLOListElement>(*node))
+            any_is_ol = true;
+        if (is_type_or_child_or_ancestor_of_list_type.operator()<HTML::HTMLUListElement>(*node))
+            any_is_ul = true;
+        if (any_is_ol && any_is_ul)
+            break;
+    }
+    if (any_is_ol && any_is_ul)
+        return SelectionsListState::Mixed;
+
+    // 9. If some member of node list is either an ol or the child or ancestor of an ol or the child of an li child of
+    //    an ol, return "mixed ol".
+    if (any_is_ol)
+        return SelectionsListState::MixedOl;
+
+    // 10. If some member of node list is either a ul or the child or ancestor of a ul or the child of an li child of a
+    //     ul, return "mixed ul".
+    if (any_is_ul)
+        return SelectionsListState::MixedUl;
+
+    // 11. Return "none".
+    return SelectionsListState::None;
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#set-the-selection's-value
+void set_the_selections_value(DOM::Document& document, FlyString const& command, Optional<String> new_value)
+{
+    // 1. Let command be the current command.
+
+    // 2. If there is no formattable node effectively contained in the active range:
+    auto has_matching_node = false;
+    for_each_node_effectively_contained_in_range(active_range(document), [&](GC::Ref<DOM::Node> descendant) {
+        if (is_formattable_node(descendant)) {
+            has_matching_node = true;
+            return TraversalDecision::Break;
+        }
+        return TraversalDecision::Continue;
+    });
+    if (!has_matching_node) {
+        // 1. If command has inline command activated values, set the state override to true if new value is among them
+        //    and false if it's not.
+        auto command_definition = find_command_definition(command);
+        // FIXME: remove .has_value() once all commands are implemented.
+        if (command_definition.has_value() && !command_definition.value().inline_activated_values.is_empty()) {
+            auto new_override = new_value.has_value() && command_definition.value().inline_activated_values.contains_slow(*new_value);
+            document.set_command_state_override(command, new_override);
+        }
+
+        // 2. If command is "subscript", unset the state override for "superscript".
+        if (command == CommandNames::subscript)
+            document.clear_command_state_override(CommandNames::superscript);
+
+        // 3. If command is "superscript", unset the state override for "subscript".
+        if (command == CommandNames::superscript)
+            document.clear_command_state_override(CommandNames::subscript);
+
+        // 4. If new value is null, unset the value override (if any).
+        if (!new_value.has_value()) {
+            document.clear_command_value_override(command);
+        }
+
+        // 5. Otherwise, if command is "createLink" or it has a value specified, set the value override to new value.
+        else if (command == CommandNames::createLink || !document.query_command_value(CommandNames::createLink).is_empty()) {
+            document.set_command_value_override(command, new_value.value());
+        }
+
+        // 6. Abort these steps.
+        return;
+    }
+
+    // 3. If the active range's start node is an editable Text node, and its start offset is neither zero nor its start
+    //    node's length, call splitText() on the active range's start node, with argument equal to the active range's
+    //    start offset. Then set the active range's start node to the result, and its start offset to zero.
+    auto range = active_range(document);
+    auto start = range->start();
+    if (start.node->is_editable() && is<DOM::Text>(*start.node) && start.offset != 0 && start.offset != start.node->length()) {
+        auto new_node = MUST(static_cast<DOM::Text&>(*start.node).split_text(start.offset));
+        MUST(range->set_start(new_node, 0));
+    }
+
+    // 4. If the active range's end node is an editable Text node, and its end offset is neither zero nor its end node's
+    //    length, call splitText() on the active range's end node, with argument equal to the active range's end offset.
+    auto end = range->end();
+    if (end.node->is_editable() && is<DOM::Text>(*end.node) && end.offset != 0 && end.offset != end.node->length())
+        MUST(static_cast<DOM::Text&>(*end.node).split_text(end.offset));
+
+    // 5. Let element list be all editable Elements effectively contained in the active range.
+    Vector<GC::Ref<DOM::Element>> element_list;
+    for_each_node_effectively_contained_in_range(active_range(document), [&](GC::Ref<DOM::Node> descendant) {
+        if (descendant->is_editable() && is<DOM::Element>(*descendant))
+            element_list.append(static_cast<DOM::Element&>(*descendant));
+        return TraversalDecision::Continue;
+    });
+
+    // 6. For each element in element list, clear the value of element.
+    for (auto element : element_list)
+        clear_the_value(command, element);
+
+    // 7. Let node list be all editable nodes effectively contained in the active range.
+    Vector<GC::Ref<DOM::Node>> node_list;
+    for_each_node_effectively_contained_in_range(active_range(document), [&](GC::Ref<DOM::Node> descendant) {
+        if (descendant->is_editable())
+            node_list.append(descendant);
+        return TraversalDecision::Continue;
+    });
+
+    // 8. For each node in node list:
+    for (auto node : node_list) {
+        // 1. Push down values on node.
+        push_down_values(command, node, new_value);
+
+        // 2. If node is an allowed child of "span", force the value of node.
+        if (is_allowed_child_of_node(node, HTML::TagNames::span))
+            force_the_value(node, command, new_value);
     }
 }
 
@@ -2378,24 +3885,38 @@ Optional<String> specified_command_value(GC::Ref<DOM::Element> element, FlyStrin
         return {};
     }
 
-    // FIXME: 4. If command is "strikethrough", and element has a style attribute set, and that attribute sets "text-decoration":
-    if (false) {
-        // FIXME: 1. If element's style attribute sets "text-decoration" to a value containing "line-through", return "line-through".
+    // 4. If command is "strikethrough", and element has a style attribute set, and that attribute sets
+    //    "text-decoration":
+    if (command == CommandNames::strikethrough) {
+        auto text_decoration_style = property_in_style_attribute(element, CSS::PropertyID::TextDecoration);
+        if (text_decoration_style.has_value()) {
+            // 1. If element's style attribute sets "text-decoration" to a value containing "line-through", return
+            //    "line-through".
+            if (text_decoration_style.value()->is_value_list()
+                && value_list_contains_keyword(text_decoration_style.value()->as_value_list(), CSS::Keyword::LineThrough))
+                return "line-through"_string;
 
-        // 2. Return null.
-        return {};
+            // 2. Return null.
+            return {};
+        }
     }
 
     // 5. If command is "strikethrough" and element is an s or strike element, return "line-through".
     if (command == CommandNames::strikethrough && element->local_name().is_one_of(HTML::TagNames::s, HTML::TagNames::strike))
         return "line-through"_string;
 
-    // FIXME: 6. If command is "underline", and element has a style attribute set, and that attribute sets "text-decoration":
-    if (false) {
-        // FIXME: 1. If element's style attribute sets "text-decoration" to a value containing "underline", return "underline".
+    // 6. If command is "underline", and element has a style attribute set, and that attribute sets "text-decoration":
+    if (command == CommandNames::underline) {
+        auto text_decoration_style = property_in_style_attribute(element, CSS::PropertyID::TextDecoration);
+        if (text_decoration_style.has_value()) {
+            // 1. If element's style attribute sets "text-decoration" to a value containing "underline", return "underline".
+            if (text_decoration_style.value()->is_value_list()
+                && value_list_contains_keyword(text_decoration_style.value()->as_value_list(), CSS::Keyword::Underline))
+                return "underline"_string;
 
-        // 2. Return null.
-        return {};
+            // 2. Return null.
+            return {};
+        }
     }
 
     // 7. If command is "underline" and element is a u element, return "underline".
@@ -2413,12 +3934,23 @@ Optional<String> specified_command_value(GC::Ref<DOM::Element> element, FlyStrin
     if (!property.has_value())
         return {};
 
-    // FIXME: 10. If element has a style attribute set, and that attribute has the effect of setting property, return the value
+    // 10. If element has a style attribute set, and that attribute has the effect of setting property, return the value
     //     that it sets property to.
+    auto style_value = property_in_style_attribute(element, property.value());
+    if (style_value.has_value())
+        return style_value.value()->to_string(CSS::CSSStyleValue::SerializationMode::Normal);
 
-    // FIXME: 11. If element is a font element that has an attribute whose effect is to create a presentational hint for
+    // 11. If element is a font element that has an attribute whose effect is to create a presentational hint for
     //     property, return the value that the hint sets property to. (For a size of 7, this will be the non-CSS value
     //     "xxx-large".)
+    if (is<HTML::HTMLFontElement>(*element)) {
+        auto const& font_element = static_cast<HTML::HTMLFontElement&>(*element);
+        auto cascaded_properties = font_element.document().heap().allocate<CSS::CascadedProperties>();
+        font_element.apply_presentational_hints(cascaded_properties);
+        auto property_value = cascaded_properties->property(property.value());
+        if (property_value)
+            return property_value->to_string(CSS::CSSStyleValue::SerializationMode::Normal);
+    }
 
     // 12. If element is in the following list, and property is equal to the CSS property name listed for it, return the
     //     string listed for it.
@@ -2434,13 +3966,13 @@ Optional<String> specified_command_value(GC::Ref<DOM::Element> element, FlyStrin
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#split-the-parent
-void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& nodes)
+void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& node_list)
 {
-    VERIFY(nodes.size() > 0);
+    VERIFY(!node_list.is_empty());
 
     // 1. Let original parent be the parent of the first member of node list.
-    GC::Ref<DOM::Node> first_node = *nodes.first();
-    GC::Ref<DOM::Node> last_node = *nodes.last();
+    GC::Ref<DOM::Node> first_node = *node_list.first();
+    GC::Ref<DOM::Node> last_node = *node_list.last();
     GC::Ref<DOM::Node> original_parent = *first_node->parent();
 
     // 2. If original parent is not editable or its parent is null, do nothing and abort these
@@ -2451,7 +3983,7 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& nodes)
     // 3. If the first child of original parent is in node list, remove extraneous line breaks
     //    before original parent.
     GC::Ref<DOM::Node> first_child = *original_parent->first_child();
-    auto first_child_in_nodes_list = nodes.contains_slow(first_child);
+    auto first_child_in_nodes_list = node_list.contains_slow(first_child);
     if (first_child_in_nodes_list)
         remove_extraneous_line_breaks_before_node(original_parent);
 
@@ -2462,7 +3994,7 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& nodes)
     // 5. If the last child of original parent is in node list, and original parent precedes a line
     //    break, set precedes line break to true. Otherwise, set precedes line break to false.
     GC::Ref<DOM::Node> last_child = *original_parent->last_child();
-    bool last_child_in_nodes_list = nodes.contains_slow(last_child);
+    bool last_child_in_nodes_list = node_list.contains_slow(last_child);
     auto precedes_line_break = last_child_in_nodes_list && precedes_a_line_break(original_parent);
 
     // 6. If the first child of original parent is not in node list, but its last child is:
@@ -2472,7 +4004,7 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& nodes)
     if (!first_child_in_nodes_list && last_child_in_nodes_list) {
         // 1. For each node in node list, in reverse order, insert node into the parent of original
         //    parent immediately after original parent, preserving ranges.
-        for (auto node : nodes.in_reverse())
+        for (auto node : node_list.in_reverse())
             move_node_preserving_ranges(node, parent_of_original_parent, original_parent_index + 1);
 
         // 2. If precedes line break is true, and the last member of node list does not precede a
@@ -2512,8 +4044,8 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& nodes)
 
     // 8. For each node in node list, insert node into the parent of original parent immediately
     //    before original parent, preserving ranges.
-    for (auto node : nodes)
-        move_node_preserving_ranges(node, parent_of_original_parent, original_parent_index - 1);
+    for (auto node : node_list)
+        move_node_preserving_ranges(node, parent_of_original_parent, original_parent_index++);
 
     // 9. If follows line break is true, and the first member of node list does not follow a line
     //    break, call createElement("br") on the context object and insert the result immediately
@@ -2552,6 +4084,356 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& nodes)
     //     extraneous line breaks at the end of node list's last member's parent.
     if (!last_node->next_sibling() && last_node->parent())
         remove_extraneous_line_breaks_at_the_end_of_node(*last_node->parent());
+}
+
+enum class ToggleListMode : u8 {
+    Enable,
+    Disable,
+};
+
+// https://w3c.github.io/editing/docs/execCommand/#toggle-lists
+void toggle_lists(DOM::Document& document, FlyString const& tag_name)
+{
+    VERIFY(first_is_one_of(tag_name, HTML::TagNames::ol, HTML::TagNames::ul));
+
+    // 1. Let mode be "disable" if the selection's list state is tag name, and "enable" otherwise.
+    auto mode = ToggleListMode::Enable;
+    auto list_state = selections_list_state(document);
+    if ((list_state == SelectionsListState::Ol && tag_name == HTML::TagNames::ol)
+        || (list_state == SelectionsListState::Ul && tag_name == HTML::TagNames::ul))
+        mode = ToggleListMode::Disable;
+
+    // 2. Let other tag name be "ol" if tag name is "ul", and "ul" if tag name is "ol".
+    auto other_tag_name = tag_name == HTML::TagNames::ul ? HTML::TagNames::ol : HTML::TagNames::ul;
+
+    // 3. Let items be a list of all lis that are inclusive ancestors of the active range's start and/or end node.
+    Vector<GC::Ref<DOM::Node>> items;
+    auto add_li_ancestors = [&items](GC::Ref<DOM::Node> node) {
+        node->for_each_inclusive_ancestor([&items](GC::Ref<DOM::Node> ancestor) {
+            if (is<HTML::HTMLLIElement>(*ancestor) && !items.contains_slow(ancestor))
+                items.append(ancestor);
+            return IterationDecision::Continue;
+        });
+    };
+    auto range = active_range(document);
+    add_li_ancestors(range->start_container());
+    add_li_ancestors(range->end_container());
+
+    // 4. For each item in items, normalize sublists of item.
+    for (auto item : items)
+        normalize_sublists_in_node(item);
+
+    // 5. Block-extend the active range, and let new range be the result.
+    auto new_range = block_extend_a_range(*active_range(document));
+
+    // 6. If mode is "enable", then let lists to convert consist of every editable HTML element with local name other
+    //    tag name that is contained in new range, and for every list in lists to convert:
+    if (mode == ToggleListMode::Enable) {
+        Vector<GC::Ref<DOM::Node>> lists_to_convert;
+        new_range->for_each_contained([&](GC::Ref<DOM::Node> node) {
+            if (node->is_editable() && is<HTML::HTMLElement>(*node)
+                && static_cast<DOM::Element&>(*node).local_name() == other_tag_name)
+                lists_to_convert.append(node);
+            return IterationDecision::Continue;
+        });
+        for (auto list : lists_to_convert) {
+            // 1. If list's previousSibling or nextSibling is an editable HTML element with local name tag name:
+            if ((is<HTML::HTMLElement>(list->previous_sibling()) && list->previous_sibling()->is_editable()
+                    && static_cast<DOM::Element&>(*list->previous_sibling()).local_name() == tag_name)
+                || (is<HTML::HTMLElement>(list->next_sibling()) && list->next_sibling()->is_editable()
+                    && static_cast<DOM::Element&>(*list->next_sibling()).local_name() == tag_name)) {
+                // 1. Let children be list's children.
+                Vector<GC::Ref<DOM::Node>> children;
+                list->for_each_child([&children](GC::Ref<DOM::Node> child) {
+                    children.append(child);
+                    return IterationDecision::Continue;
+                });
+
+                // 2. Record the values of children, and let values be the result.
+                auto values = record_the_values_of_nodes(children);
+
+                // 3. Split the parent of children.
+                split_the_parent_of_nodes(children);
+
+                // 4. Wrap children, with sibling criteria returning true for an HTML element with local name tag name and
+                //    false otherwise.
+                wrap(
+                    children,
+                    [&tag_name](GC::Ref<DOM::Node> sibling) {
+                        return is<HTML::HTMLElement>(*sibling)
+                            && static_cast<DOM::Element&>(*sibling).local_name() == tag_name;
+                    },
+                    {});
+
+                // 5. Restore the values from values.
+                restore_the_values_of_nodes(values);
+            }
+
+            // 2. Otherwise, set the tag name of list to tag name.
+            else {
+                set_the_tag_name(static_cast<DOM::Element&>(*list), tag_name);
+            }
+        }
+    }
+
+    // 7. Let node list be a list of nodes, initially empty.
+    Vector<GC::Ref<DOM::Node>> node_list;
+
+    // 8. For each node node contained in new range, if node is editable; the last member of node list (if any) is not
+    //    an ancestor of node; node is not an indentation element; and either node is an ol or ul, or its parent is an
+    //    ol or ul, or it is an allowed child of "li"; then append node to node list.
+    new_range->for_each_contained([&node_list](GC::Ref<DOM::Node> node) {
+        if (node->is_editable()
+            && (node_list.is_empty() || !node_list.last()->is_ancestor_of(node))
+            && !is_indentation_element(node)
+            && ((is<HTML::HTMLOListElement>(*node) || is<HTML::HTMLUListElement>(*node))
+                || (is<HTML::HTMLOListElement>(node->parent()) || is<HTML::HTMLUListElement>(node->parent()))
+                || is_allowed_child_of_node(node, HTML::TagNames::li)))
+            node_list.append(node);
+        return IterationDecision::Continue;
+    });
+
+    // 9. If mode is "enable", remove from node list any ol or ul whose parent is not also an ol or ul.
+    if (mode == ToggleListMode::Enable) {
+        node_list.remove_all_matching([](GC::Ref<DOM::Node> node) {
+            return (is<HTML::HTMLOListElement>(*node) && !is<HTML::HTMLOListElement>(node->parent()))
+                || (is<HTML::HTMLUListElement>(*node) && !is<HTML::HTMLUListElement>(node->parent()));
+        });
+    }
+
+    // 10. If mode is "disable", then while node list is not empty:
+    if (mode == ToggleListMode::Disable) {
+        while (!node_list.is_empty()) {
+            // 1. Let sublist be an empty list of nodes.
+            Vector<GC::Ref<DOM::Node>> sublist;
+
+            // 2. Remove the first member from node list and append it to sublist.
+            sublist.append(node_list.take_first());
+
+            // 3. If the first member of sublist is an HTML element with local name tag name, outdent it and continue this
+            //    loop from the beginning.
+            if (is<HTML::HTMLElement>(*sublist.first()) && static_cast<DOM::Element&>(*sublist.first()).local_name() == tag_name) {
+                outdent(sublist.first());
+                continue;
+            }
+
+            // 4. While node list is not empty, and the first member of node list is the nextSibling of the last member of
+            //    sublist and is not an HTML element with local name tag name, remove the first member from node list and
+            //    append it to sublist.
+            while (!node_list.is_empty() && node_list.first().ptr() == sublist.last()->next_sibling()
+                && !(is<HTML::HTMLElement>(*node_list.first()) && static_cast<DOM::Element&>(*node_list.first()).local_name() == tag_name))
+                sublist.append(node_list.take_first());
+
+            // 5. Record the values of sublist, and let values be the result.
+            auto values = record_the_values_of_nodes(sublist);
+
+            // 6. Split the parent of sublist.
+            split_the_parent_of_nodes(sublist);
+
+            // 7. Fix disallowed ancestors of each member of sublist.
+            for (auto member : sublist)
+                fix_disallowed_ancestors_of_node(member);
+
+            // 8. Restore the values from values.
+            restore_the_values_of_nodes(values);
+        }
+    }
+
+    // 11. Otherwise, while node list is not empty:
+    else {
+        while (!node_list.is_empty()) {
+            // 1. Let sublist be an empty list of nodes.
+            Vector<GC::Ref<DOM::Node>> sublist;
+
+            // 2. While either sublist is empty, or node list is not empty and its first member is the nextSibling of
+            //    sublist's last member:
+            while (sublist.is_empty() || (!node_list.is_empty() && node_list.first().ptr() == sublist.last()->next_sibling())) {
+                // 1. If node list's first member is a p or div, set the tag name of node list's first member to "li",
+                //    and append the result to sublist. Remove the first member from node list.
+                if (is<HTML::HTMLParagraphElement>(*node_list.first()) || is<HTML::HTMLDivElement>(*node_list.first())) {
+                    sublist.append(set_the_tag_name(static_cast<DOM::Element&>(*node_list.first()), HTML::TagNames::li));
+                    node_list.take_first();
+                }
+
+                // 2. Otherwise, if the first member of node list is an li or ol or ul, remove it from node list and
+                //    append it to sublist.
+                else if (is<DOM::Element>(*node_list.first())
+                    && (is<HTML::HTMLLIElement>(*node_list.first())
+                        || is<HTML::HTMLOListElement>(*node_list.first())
+                        || is<HTML::HTMLUListElement>(*node_list.first()))) {
+                    sublist.append(node_list.take_first());
+                }
+
+                // 3. Otherwise:
+                else {
+                    // 1. Let nodes to wrap be a list of nodes, initially empty.
+                    Vector<GC::Ref<DOM::Node>> nodes_to_wrap;
+
+                    // 2. While nodes to wrap is empty, or node list is not empty and its first member is the
+                    //    nextSibling of nodes to wrap's last member and the first member of node list is an inline node
+                    //    and the last member of nodes to wrap is an inline node other than a br, remove the first
+                    //    member from node list and append it to nodes to wrap.
+                    while (nodes_to_wrap.is_empty() || (!node_list.is_empty() && node_list.first().ptr() == nodes_to_wrap.last()->next_sibling() && is_inline_node(node_list.first()) && is_inline_node(nodes_to_wrap.last()) && !is<HTML::HTMLBRElement>(*nodes_to_wrap.last())))
+                        nodes_to_wrap.append(node_list.take_first());
+
+                    // 3. Wrap nodes to wrap, with new parent instructions returning the result of calling
+                    //    createElement("li") on the context object. Append the result to sublist.
+                    auto result = wrap(
+                        nodes_to_wrap,
+                        {},
+                        [&] { return MUST(DOM::create_element(document, HTML::TagNames::li, Namespace::HTML)); });
+                    if (result)
+                        sublist.append(*result);
+                }
+            }
+
+            // 3. If sublist's first member's parent is an HTML element with local name tag name, or if every member of
+            //    sublist is an ol or ul, continue this loop from the beginning.
+            if (!sublist.is_empty() && is<HTML::HTMLElement>(sublist.first()->parent())
+                && static_cast<DOM::Element&>(*sublist.first()->parent()).local_name() == tag_name)
+                continue;
+            bool all_are_ol_or_ul = true;
+            for (auto member : sublist) {
+                if (!is<HTML::HTMLOListElement>(*member) && !is<HTML::HTMLUListElement>(*member)) {
+                    all_are_ol_or_ul = false;
+                    break;
+                }
+            }
+            if (all_are_ol_or_ul)
+                continue;
+
+            // 4. If sublist's first member's parent is an HTML element with local name other tag name:
+            if (!sublist.is_empty() && is<HTML::HTMLElement>(sublist.first()->parent())
+                && static_cast<DOM::Element&>(*sublist.first()->parent()).local_name() == other_tag_name) {
+                // 1. Record the values of sublist, and let values be the result.
+                auto values = record_the_values_of_nodes(sublist);
+
+                // 2. Split the parent of sublist.
+                split_the_parent_of_nodes(sublist);
+
+                // 3. Wrap sublist, with sibling criteria returning true for an HTML element with local name tag name
+                //    and false otherwise, and new parent instructions returning the result of calling
+                //    createElement(tag name) on the context object.
+                wrap(
+                    sublist,
+                    [&](GC::Ref<DOM::Node> sibling) {
+                        return is<HTML::HTMLElement>(*sibling)
+                            && static_cast<DOM::Element&>(*sibling).local_name() == tag_name;
+                    },
+                    [&] { return MUST(DOM::create_element(document, tag_name, Namespace::HTML)); });
+
+                // 4. Restore the values from values.
+                restore_the_values_of_nodes(values);
+
+                // 5. Continue this loop from the beginning.
+                continue;
+            }
+
+            // 5. Wrap sublist, with sibling criteria returning true for an HTML element with local name tag name and
+            //    false otherwise, and new parent instructions being the following:
+            auto result = wrap(
+                sublist,
+                [&](GC::Ref<DOM::Node> sibling) {
+                    return is<HTML::HTMLElement>(*sibling)
+                        && static_cast<DOM::Element&>(*sibling).local_name() == tag_name;
+                },
+                [&] -> GC::Ptr<DOM::Node> {
+                    // 1. If sublist's first member's parent is not an editable simple indentation element, or sublist's
+                    //    first member's parent's previousSibling is not an editable HTML element with local name tag name,
+                    //    call createElement(tag name) on the context object and return the result.
+                    auto* first_parent = sublist.first()->parent();
+                    if (!first_parent->is_editable() || !is_simple_indentation_element(*first_parent)
+                        || !(is<HTML::HTMLElement>(first_parent->previous_sibling())
+                            && static_cast<DOM::Element&>(*first_parent->previous_sibling()).local_name() == tag_name))
+                        return MUST(DOM::create_element(document, tag_name, Namespace::HTML));
+
+                    // 2. Let list be sublist's first member's parent's previousSibling.
+                    GC::Ref<DOM::Node> list = *sublist.first()->parent()->previous_sibling();
+
+                    // 3. Normalize sublists of list's lastChild.
+                    normalize_sublists_in_node(*list->last_child());
+
+                    // 4. If list's lastChild is not an editable HTML element with local name tag name, call
+                    //    createElement(tag name) on the context object, and append the result as the last child of list.
+                    if (!list->last_child()->is_editable() || !is<HTML::HTMLElement>(list->last_child())
+                        || static_cast<DOM::Element&>(*list->last_child()).local_name() != tag_name)
+                        MUST(list->append_child(MUST(DOM::create_element(document, tag_name, Namespace::HTML))));
+
+                    // 5. Return the last child of list.
+                    return list->last_child();
+                });
+
+            // 6. Fix disallowed ancestors of the previous step's result.
+            if (result)
+                fix_disallowed_ancestors_of_node(*result);
+        }
+    }
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#equivalent-values
+bool values_are_equivalent(FlyString const& command, Optional<String> a, Optional<String> b)
+{
+    // Two quantities are equivalent values for a command if either both are null,
+    if (!a.has_value() && !b.has_value())
+        return true;
+
+    // NOTE: Both need to be strings for all remaining conditions.
+    if (!a.has_value() || !b.has_value())
+        return false;
+
+    // or both are strings and the command defines equivalent values and they match the definition.
+    if (command.is_one_of(CommandNames::backColor, CommandNames::foreColor, CommandNames::hiliteColor)) {
+        // Either both strings are valid CSS colors and have the same red, green, blue, and alpha components, or neither
+        // string is a valid CSS color.
+        auto a_color = Color::from_string(a.value());
+        auto b_color = Color::from_string(b.value());
+        if (a_color.has_value())
+            return a_color == b_color;
+        return !a_color.has_value() && !b_color.has_value();
+    }
+    if (command == CommandNames::bold) {
+        // Either the two strings are equal, or one is "bold" and the other is "700", or one is "normal" and the other
+        // is "400".
+        if (a.value() == b.value())
+            return true;
+
+        auto either_is_bold = first_is_one_of("bold"sv, a.value(), b.value());
+        auto either_is_700 = first_is_one_of("700"sv, a.value(), b.value());
+        auto either_is_normal = first_is_one_of("normal"sv, a.value(), b.value());
+        auto either_is_400 = first_is_one_of("400"sv, a.value(), b.value());
+
+        return (either_is_bold && either_is_700) || (either_is_normal && either_is_400);
+    }
+
+    // or both are strings and they're equal and the command does not define any equivalent values,
+    return a.value() == b.value();
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#loosely-equivalent-values
+bool values_are_loosely_equivalent(FlyString const& command, Optional<String> a, Optional<String> b)
+{
+    // Two quantities are loosely equivalent values for a command if either they are equivalent values for the command,
+    if (values_are_equivalent(command, a, b))
+        return true;
+
+    // or if the command is the fontSize command; one of the quantities is one of "x-small", "small", "medium", "large",
+    // "x-large", "xx-large", or "xxx-large"; and the other quantity is the resolved value of "font-size" on a font
+    // element whose size attribute has the corresponding value set ("1" through "7" respectively).
+    if (command == CommandNames::fontSize && a.has_value() && b.has_value()) {
+        static constexpr Array named_quantities { "x-small"sv, "small"sv, "medium"sv, "large"sv, "x-large"sv,
+            "xx-large"sv, "xxx-large"sv };
+        static constexpr Array size_quantities { "1"sv, "2"sv, "3"sv, "4"sv, "5"sv, "6"sv, "7"sv };
+        static_assert(named_quantities.size() == size_quantities.size());
+
+        auto a_index = named_quantities.first_index_of(a.value())
+                           .value_or_lazy_evaluated_optional([&] { return size_quantities.first_index_of(a.value()); });
+        auto b_index = named_quantities.first_index_of(b.value())
+                           .value_or_lazy_evaluated_optional([&] { return size_quantities.first_index_of(b.value()); });
+
+        return a_index.has_value() && a_index == b_index;
+    }
+
+    return false;
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#wrap
@@ -2625,8 +4507,14 @@ GC::Ptr<DOM::Node> wrap(
         auto first_member = node_list.first();
         first_member->parent()->insert_before(*new_parent, first_member);
 
-        // FIXME: 2. If any range has a boundary point with node equal to the parent of new parent and offset equal to the
+        // 2. If any range has a boundary point with node equal to the parent of new parent and offset equal to the
         //    index of new parent, add one to that boundary point's offset.
+        auto new_parent_index = new_parent->index();
+        auto active_range = new_parent->document().get_selection()->range();
+        if (active_range && active_range->start_container() == new_parent && active_range->start_offset() == new_parent_index)
+            MUST(active_range->set_start(active_range->start_container(), new_parent_index + 1));
+        if (active_range && active_range->end_container() == new_parent && active_range->end_offset() == new_parent_index)
+            MUST(active_range->set_end(active_range->end_container(), new_parent_index + 1));
     }
 
     // 11. Let original parent be the parent of the first member of node list.
@@ -2735,6 +4623,61 @@ GC::Ptr<DOM::Node> wrap(
     return new_parent;
 }
 
+GC::Ptr<DOM::Node> first_formattable_node_effectively_contained(GC::Ptr<DOM::Range> range)
+{
+    GC::Ptr<DOM::Node> node;
+    for_each_node_effectively_contained_in_range(range, [&](GC::Ref<DOM::Node> descendant) {
+        if (is_formattable_node(descendant)) {
+            node = descendant;
+            return TraversalDecision::Break;
+        }
+        return TraversalDecision::Continue;
+    });
+    return node;
+}
+
+CSSPixels font_size_to_pixel_size(StringView font_size)
+{
+    // If the font size ends in 'px', interpret the preceding as a number and return it.
+    if (font_size.length() >= 2 && font_size.substring_view(font_size.length() - 2).equals_ignoring_ascii_case("px"sv)) {
+        auto optional_number = font_size.substring_view(0, font_size.length() - 2).to_number<float>();
+        if (optional_number.has_value())
+            return CSSPixels::nearest_value_for(optional_number.value());
+    }
+
+    // Try to map the font size directly to a keyword (e.g. medium or x-large)
+    auto keyword = CSS::keyword_from_string(font_size);
+
+    // If that failed, try to interpret it as a legacy font size (e.g. 1 through 7)
+    if (!keyword.has_value())
+        keyword = HTML::HTMLFontElement::parse_legacy_font_size(font_size);
+
+    // If that also failed, give up
+    auto pixel_size = CSS::StyleComputer::default_user_font_size();
+    if (!keyword.has_value())
+        return pixel_size;
+
+    // Return scaled pixel size
+    return pixel_size * CSS::StyleComputer::absolute_size_mapping(keyword.release_value());
+}
+
+void for_each_node_effectively_contained_in_range(GC::Ptr<DOM::Range> range, Function<TraversalDecision(GC::Ref<DOM::Node>)> callback)
+{
+    if (!range)
+        return;
+
+    // A node can still be "effectively contained" in range even if it's not actually contained within the range; so we
+    // need to do an inclusive subtree traversal since the common ancestor could be matched as well.
+    range->common_ancestor_container()->for_each_in_inclusive_subtree([&](GC::Ref<DOM::Node> descendant) {
+        if (!is_effectively_contained_in_range(descendant, *range)) {
+            // NOTE: We cannot skip children here since if a descendant is not effectively contained within a range, its
+            //       children might still be.
+            return TraversalDecision::Continue;
+        }
+        return callback(descendant);
+    });
+}
+
 bool has_visible_children(GC::Ref<DOM::Node> node)
 {
     bool has_visible_child = false;
@@ -2757,6 +4700,39 @@ bool is_heading(FlyString const& local_name)
         HTML::TagNames::h4,
         HTML::TagNames::h5,
         HTML::TagNames::h6);
+}
+
+String justify_alignment_to_string(JustifyAlignment alignment)
+{
+    switch (alignment) {
+    case JustifyAlignment::Center:
+        return "center"_string;
+    case JustifyAlignment::Justify:
+        return "justify"_string;
+    case JustifyAlignment::Left:
+        return "left"_string;
+    case JustifyAlignment::Right:
+        return "right"_string;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+Array<StringView, 7> named_font_sizes()
+{
+    return { "x-small"sv, "small"sv, "medium"sv, "large"sv, "x-large"sv, "xx-large"sv, "xxx-large"sv };
+}
+
+Optional<NonnullRefPtr<CSS::CSSStyleValue const>> property_in_style_attribute(GC::Ref<DOM::Element> element, CSS::PropertyID property_id)
+{
+    auto inline_style = element->inline_style();
+    if (!inline_style)
+        return {};
+
+    auto style_property = inline_style->property(property_id);
+    if (!style_property.has_value())
+        return {};
+
+    return style_property.value().value;
 }
 
 Optional<CSS::Display> resolved_display(GC::Ref<DOM::Node> node)
@@ -2790,6 +4766,23 @@ Optional<NonnullRefPtr<CSS::CSSStyleValue const>> resolved_value(GC::Ref<DOM::No
     if (!optional_style_property.has_value())
         return {};
     return optional_style_property.value().value;
+}
+
+void take_the_action_for_command(DOM::Document& document, FlyString const& command, String const& value)
+{
+    auto const& command_definition = find_command_definition(command);
+    // FIXME: replace with VERIFY(command_definition.has_value()) as soon as all command definitions are in place.
+    if (command_definition.has_value())
+        command_definition->action(document, value);
+}
+
+bool value_list_contains_keyword(CSS::StyleValueList const& value_list, CSS::Keyword keyword)
+{
+    for (auto& css_style_value : value_list.values()) {
+        if (css_style_value->is_keyword() && css_style_value->as_keyword().keyword() == keyword)
+            return true;
+    }
+    return false;
 }
 
 }

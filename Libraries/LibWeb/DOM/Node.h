@@ -58,6 +58,11 @@ enum class IsDescendant {
     Yes,
 };
 
+enum class ShouldComputeRole {
+    No,
+    Yes,
+};
+
 #define ENUMERATE_STYLE_INVALIDATION_REASONS(X)     \
     X(ActiveElementChange)                          \
     X(AdoptedStyleSheetsList)                       \
@@ -166,6 +171,7 @@ public:
     virtual bool is_html_object_element() const { return false; }
     virtual bool is_html_form_element() const { return false; }
     virtual bool is_html_image_element() const { return false; }
+    virtual bool is_html_iframe_element() const { return false; }
     virtual bool is_navigable_container() const { return false; }
     virtual bool is_lazy_loading() const { return false; }
 
@@ -193,8 +199,8 @@ public:
 
     WebIDL::ExceptionOr<GC::Ref<Node>> replace_child(GC::Ref<Node> node, GC::Ref<Node> child);
 
-    WebIDL::ExceptionOr<GC::Ref<Node>> clone_node(Document* document = nullptr, bool subtree = false, Node* parent = nullptr);
-    WebIDL::ExceptionOr<GC::Ref<Node>> clone_single_node(Document&);
+    WebIDL::ExceptionOr<GC::Ref<Node>> clone_node(Document* document = nullptr, bool subtree = false, Node* parent = nullptr) const;
+    WebIDL::ExceptionOr<GC::Ref<Node>> clone_single_node(Document&) const;
     WebIDL::ExceptionOr<GC::Ref<Node>> clone_node_binding(bool subtree);
 
     // NOTE: This is intended for the JS bindings.
@@ -257,7 +263,7 @@ public:
     virtual void removed_from(Node*);
     virtual void children_changed() { }
     virtual void adopted_from(Document&) { }
-    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) { return {}; }
+    virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) const { return {}; }
 
     Layout::Node const* layout_node() const { return m_layout_node; }
     Layout::Node* layout_node() { return m_layout_node; }
@@ -585,6 +591,36 @@ public:
     }
 
     template<typename Callback>
+    void for_each_ancestor(Callback callback) const
+    {
+        return const_cast<Node*>(this)->for_each_ancestor(move(callback));
+    }
+
+    template<typename Callback>
+    void for_each_ancestor(Callback callback)
+    {
+        for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
+            if (callback(*ancestor) == IterationDecision::Break)
+                break;
+        }
+    }
+
+    template<typename Callback>
+    void for_each_inclusive_ancestor(Callback callback) const
+    {
+        return const_cast<Node*>(this)->for_each_inclusive_ancestor(move(callback));
+    }
+
+    template<typename Callback>
+    void for_each_inclusive_ancestor(Callback callback)
+    {
+        for (auto* ancestor = this; ancestor; ancestor = ancestor->parent()) {
+            if (callback(*ancestor) == IterationDecision::Break)
+                break;
+        }
+    }
+
+    template<typename Callback>
     void for_each_child(Callback callback) const
     {
         return const_cast<Node*>(this)->for_each_child(move(callback));
@@ -732,7 +768,7 @@ public:
         return false;
     }
 
-    ErrorOr<String> accessible_name(Document const&) const;
+    ErrorOr<String> accessible_name(Document const&, ShouldComputeRole = ShouldComputeRole::Yes) const;
     ErrorOr<String> accessible_description(Document const&) const;
 
     Optional<String> locate_a_namespace(Optional<String> const& prefix) const;
@@ -765,7 +801,7 @@ protected:
 
     void build_accessibility_tree(AccessibilityTreeNode& parent);
 
-    ErrorOr<String> name_or_description(NameOrDescription, Document const&, HashTable<UniqueNodeID>&, IsDescendant = IsDescendant::No) const;
+    ErrorOr<String> name_or_description(NameOrDescription, Document const&, HashTable<UniqueNodeID>&, IsDescendant = IsDescendant::No, ShouldComputeRole = ShouldComputeRole::Yes) const;
 
 private:
     void queue_tree_mutation_record(Vector<GC::Root<Node>> added_nodes, Vector<GC::Root<Node>> removed_nodes, Node* previous_sibling, Node* next_sibling);

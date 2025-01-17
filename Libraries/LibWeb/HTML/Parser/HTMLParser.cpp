@@ -36,6 +36,7 @@
 #include <LibWeb/HTML/Parser/HTMLEncodingDetection.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/Parser/HTMLToken.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
@@ -240,7 +241,6 @@ void HTMLParser::run(const URL::URL& url, HTMLTokenizer::StopAtInsertionPoint st
     m_document->set_source(MUST(String::from_byte_string(m_tokenizer.source())));
     run(stop_at_insertion_point);
     the_end(*m_document, this);
-    m_document->detach_parser({});
 }
 
 // https://html.spec.whatwg.org/multipage/parsing.html#the-end
@@ -310,6 +310,9 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
         (void)document->scripts_to_execute_when_parsing_has_finished().take_first();
     }
 
+    // FIXME: Spec bug: https://github.com/whatwg/html/issues/10914
+    document->scroll_to_the_fragment();
+
     // 6. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following substeps:
     queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(heap, [document] {
         // 1. Set the Document's load timing info's DOM content loaded event start time to the current high resolution time given the Document's relevant global object.
@@ -339,9 +342,13 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
     }));
 
     // 9. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following steps:
-    queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(document->heap(), [document] {
+    queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(document->heap(), [document, parser] {
         // 1. Update the current document readiness to "complete".
         document->update_readiness(HTML::DocumentReadyState::Complete);
+
+        // AD-HOC: We need to wait until the document ready state is complete before detaching the parser, otherwise the DOM complete time will not be set correctly.
+        if (parser)
+            document->detach_parser({});
 
         // 2. If the Document object's browsing context is null, then abort these steps.
         if (!document->browsing_context())
@@ -749,8 +756,7 @@ GC::Ref<DOM::Element> HTMLParser::create_element_for(HTMLToken const& token, Opt
             perform_a_microtask_checkpoint();
 
         // 3. Push a new element queue onto document's relevant agent's custom element reactions stack.
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*vm.custom_data());
-        custom_data.custom_element_reactions_stack.element_queue_stack.append({});
+        relevant_agent(document).custom_element_reactions_stack.element_queue_stack.append({});
     }
 
     // 9. Let element be the result of creating an element given document, localName, given namespace, null, is, and willExecuteScript.
@@ -767,9 +773,7 @@ GC::Ref<DOM::Element> HTMLParser::create_element_for(HTMLToken const& token, Opt
     // 11. If willExecuteScript is true:
     if (will_execute_script) {
         // 1. Let queue be the result of popping from document's relevant agent's custom element reactions stack. (This will be the same element queue as was pushed above.)
-        auto& vm = main_thread_event_loop().vm();
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*vm.custom_data());
-        auto queue = custom_data.custom_element_reactions_stack.element_queue_stack.take_last();
+        auto queue = relevant_agent(document).custom_element_reactions_stack.element_queue_stack.take_last();
 
         // 2. Invoke custom element reactions in queue.
         Bindings::invoke_custom_element_reactions(queue);
@@ -5147,8 +5151,7 @@ void HTMLParser::insert_an_element_at_the_adjusted_insertion_location(GC::Ref<DO
     // 3. If the parser was not created as part of the HTML fragment parsing algorithm,
     //    then push a new element queue onto element's relevant agent's custom element reactions stack.
     if (!m_parsing_fragment) {
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*relevant_agent(*element).custom_data());
-        custom_data.custom_element_reactions_stack.element_queue_stack.append({});
+        relevant_agent(*element).custom_element_reactions_stack.element_queue_stack.append({});
     }
 
     // 4. Insert element at the adjusted insertion location.
@@ -5157,8 +5160,7 @@ void HTMLParser::insert_an_element_at_the_adjusted_insertion_location(GC::Ref<DO
     // 5. If the parser was not created as part of the HTML fragment parsing algorithm,
     //    then pop the element queue from element's relevant agent's custom element reactions stack, and invoke custom element reactions in that queue.
     if (!m_parsing_fragment) {
-        auto& custom_data = verify_cast<Bindings::WebEngineCustomData>(*relevant_agent(*element).custom_data());
-        auto queue = custom_data.custom_element_reactions_stack.element_queue_stack.take_last();
+        auto queue = relevant_agent(*element).custom_element_reactions_stack.element_queue_stack.take_last();
         Bindings::invoke_custom_element_reactions(queue);
     }
 }

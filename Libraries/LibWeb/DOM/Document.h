@@ -2,6 +2,7 @@
  * Copyright (c) 2018-2023, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2023-2024, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -612,6 +613,7 @@ public:
     void run_the_update_intersection_observations_steps(HighResolutionTime::DOMHighResTimeStamp time);
 
     void start_intersection_observing_a_lazy_loading_element(Element&);
+    void stop_intersection_observing_a_lazy_loading_element(Element&);
 
     void shared_declarative_refresh_steps(StringView input, GC::Ptr<HTML::HTMLMetaElement const> meta_element = nullptr);
 
@@ -764,6 +766,18 @@ public:
     // https://w3c.github.io/editing/docs/execCommand/#css-styling-flag
     bool css_styling_flag() const { return m_css_styling_flag; }
     void set_css_styling_flag(bool flag) { m_css_styling_flag = flag; }
+
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    Optional<bool> command_state_override(FlyString const& command) const { return m_command_state_override.get(command); }
+    void set_command_state_override(FlyString const& command, bool state) { m_command_state_override.set(command, state); }
+    void clear_command_state_override(FlyString const& command) { m_command_state_override.remove(command); }
+    void reset_command_state_overrides() { m_command_state_override.clear(); }
+
+    // https://w3c.github.io/editing/docs/execCommand/#value-override
+    Optional<String const&> command_value_override(FlyString const& command) const { return m_command_value_override.get(command); }
+    void set_command_value_override(FlyString const& command, String const& value);
+    void clear_command_value_override(FlyString const& command);
+    void reset_command_value_overrides() { m_command_value_override.clear(); }
 
     GC::Ptr<DOM::Document> container_document() const;
 
@@ -1088,6 +1102,12 @@ private:
 
     // https://w3c.github.io/editing/docs/execCommand/#css-styling-flag
     bool m_css_styling_flag { false };
+
+    // https://w3c.github.io/editing/docs/execCommand/#state-override
+    HashMap<FlyString, bool> m_command_state_override;
+
+    // https://w3c.github.io/editing/docs/execCommand/#value-override
+    HashMap<FlyString, String> m_command_value_override;
 
     // https://html.spec.whatwg.org/multipage/webstorage.html#session-storage-holder
     // A Document object has an associated session storage holder, which is null or a Storage object. It is initially null.

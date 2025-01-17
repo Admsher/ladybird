@@ -158,14 +158,11 @@ set(SOURCES
     CSS/StyleValues/PositionStyleValue.cpp
     CSS/StyleValues/RadialGradientStyleValue.cpp
     CSS/StyleValues/RectStyleValue.cpp
-    CSS/StyleValues/RotationStyleValue.cpp
-    CSS/StyleValues/ScaleStyleValue.cpp
     CSS/StyleValues/ShadowStyleValue.cpp
     CSS/StyleValues/ShorthandStyleValue.cpp
     CSS/StyleValues/StyleValueList.cpp
     CSS/StyleValues/TransformationStyleValue.cpp
     CSS/StyleValues/TransitionStyleValue.cpp
-    CSS/StyleValues/TranslationStyleValue.cpp
     CSS/StyleValues/UnresolvedStyleValue.cpp
     CSS/Supports.cpp
     CSS/SyntaxHighlighter/SyntaxHighlighter.cpp
@@ -462,6 +459,7 @@ set(SOURCES
     HTML/PotentialCORSRequest.cpp
     HTML/PromiseRejectionEvent.cpp
     HTML/RadioNodeList.cpp
+    HTML/Scripting/Agent.cpp
     HTML/Scripting/ClassicScript.cpp
     HTML/Scripting/Environments.cpp
     HTML/Scripting/EnvironmentSettingsSnapshot.cpp
@@ -523,19 +521,20 @@ set(SOURCES
     Infra/ByteSequences.cpp
     Infra/JSON.cpp
     Infra/Strings.cpp
-    IndexedDB/Internal/Algorithms.cpp
-    IndexedDB/Internal/Database.cpp
-    IndexedDB/Internal/Key.cpp
-    IndexedDB/IDBDatabase.cpp
     IndexedDB/IDBCursor.cpp
+    IndexedDB/IDBDatabase.cpp
     IndexedDB/IDBFactory.cpp
-    IndexedDB/IDBOpenDBRequest.cpp
     IndexedDB/IDBIndex.cpp
     IndexedDB/IDBKeyRange.cpp
     IndexedDB/IDBObjectStore.cpp
+    IndexedDB/IDBOpenDBRequest.cpp
     IndexedDB/IDBRequest.cpp
     IndexedDB/IDBTransaction.cpp
     IndexedDB/IDBVersionChangeEvent.cpp
+    IndexedDB/Internal/Algorithms.cpp
+    IndexedDB/Internal/Database.cpp
+    IndexedDB/Internal/Key.cpp
+    IndexedDB/Internal/RequestList.cpp
     Internals/Inspector.cpp
     Internals/InternalAnimationTimeline.cpp
     Internals/Internals.cpp
@@ -784,6 +783,7 @@ set(SOURCES
     WebAssembly/Module.cpp
     WebAssembly/Table.cpp
     WebAssembly/WebAssembly.cpp
+    WebAudio/AnalyserNode.cpp
     WebAudio/AudioBuffer.cpp
     WebAudio/AudioBufferSourceNode.cpp
     WebAudio/AudioContext.cpp

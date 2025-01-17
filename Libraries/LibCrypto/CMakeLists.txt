@@ -1,6 +1,7 @@
 add_cxx_compile_options(-Wvla)
 
 set(SOURCES
+    OpenSSL.cpp
     AEAD/ChaCha20Poly1305.cpp
     ASN1/ASN1.cpp
     ASN1/DER.cpp
@@ -26,8 +27,13 @@ set(SOURCES
     Cipher/ChaCha20.cpp
     Curves/Curve25519.cpp
     Curves/Ed25519.cpp
+    Curves/Ed448.cpp
     Curves/X25519.cpp
     Curves/X448.cpp
+    Hash/BLAKE2b.cpp
+    Hash/MD5.cpp
+    Hash/SHA1.cpp
+    Hash/SHA2.cpp
     NumberTheory/ModularFunctions.cpp
     PK/RSA.cpp
     PK/EC.cpp

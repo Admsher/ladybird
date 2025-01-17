@@ -232,11 +232,11 @@ public:
 
     PKSystem() = default;
 
-    virtual void encrypt(ReadonlyBytes in, Bytes& out) = 0;
-    virtual void decrypt(ReadonlyBytes in, Bytes& out) = 0;
+    virtual ErrorOr<ByteBuffer> encrypt(ReadonlyBytes in) = 0;
+    virtual ErrorOr<ByteBuffer> decrypt(ReadonlyBytes in) = 0;
 
-    virtual void sign(ReadonlyBytes in, Bytes& out) = 0;
-    virtual void verify(ReadonlyBytes in, Bytes& out) = 0;
+    virtual ErrorOr<bool> verify(ReadonlyBytes message, ReadonlyBytes signature) = 0;
+    virtual ErrorOr<ByteBuffer> sign(ReadonlyBytes message) = 0;
 
     virtual ByteString class_name() const = 0;
 

@@ -276,8 +276,8 @@ private:
     RefPtr<CalculatedStyleValue> parse_calculated_value(ComponentValue const&);
     RefPtr<CustomIdentStyleValue> parse_custom_ident_value(TokenStream<ComponentValue>&, std::initializer_list<StringView> blacklist);
     // NOTE: Implemented in generated code. (GenerateCSSMathFunctions.cpp)
-    OwnPtr<CalculationNode> parse_math_function(Function const&);
-    OwnPtr<CalculationNode> parse_a_calc_function_node(Function const&);
+    OwnPtr<CalculationNode> parse_math_function(Function const&, CalculationContext const&);
+    OwnPtr<CalculationNode> parse_a_calc_function_node(Function const&, CalculationContext const&);
     RefPtr<CSSStyleValue> parse_keyword_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_hue_none_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_solidus_and_alpha_value(TokenStream<ComponentValue>&);
@@ -396,8 +396,8 @@ private:
     RefPtr<CSSStyleValue> parse_grid_area_shorthand_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue> parse_grid_shorthand_value(TokenStream<ComponentValue>&);
 
-    OwnPtr<CalculationNode> convert_to_calculation_node(CalcParsing::Node const&);
-    OwnPtr<CalculationNode> parse_a_calculation(Vector<ComponentValue> const&);
+    OwnPtr<CalculationNode> convert_to_calculation_node(CalcParsing::Node const&, CalculationContext const&);
+    OwnPtr<CalculationNode> parse_a_calculation(Vector<ComponentValue> const&, CalculationContext const&);
 
     ParseErrorOr<NonnullRefPtr<Selector>> parse_complex_selector(TokenStream<ComponentValue>&, SelectorType);
     ParseErrorOr<Optional<Selector::CompoundSelector>> parse_compound_selector(TokenStream<ComponentValue>&);
@@ -442,6 +442,18 @@ private:
 
     Vector<Token> m_tokens;
     TokenStream<Token> m_token_stream;
+
+    struct FunctionContext {
+        StringView name;
+    };
+    using ValueParsingContext = Variant<PropertyID, FunctionContext>;
+    Vector<ValueParsingContext> m_value_context;
+    auto push_temporary_value_parsing_context(ValueParsingContext&& context)
+    {
+        m_value_context.append(context);
+        return ScopeGuard { [&] { m_value_context.take_last(); } };
+    }
+    bool context_allows_quirky_length() const;
 
     enum class ContextType {
         Unknown,

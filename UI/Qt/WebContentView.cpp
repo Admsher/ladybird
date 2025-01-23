@@ -164,6 +164,12 @@ WebContentView::WebContentView(QWidget* window, RefPtr<WebView::WebContentClient
 
         m_select_dropdown->exec(map_point_to_global_position(content_position));
     };
+
+    on_set_browser_zoom = [this](double factor) {
+        set_zoom(factor);
+        auto* window = static_cast<BrowserWindow*>(this->window());
+        window->update_displayed_zoom_level();
+    };
 }
 
 WebContentView::~WebContentView() = default;
@@ -821,7 +827,7 @@ void WebContentView::finish_handling_drag_event(Web::DragEvent const& event)
     if (event.type != Web::DragEvent::Type::Drop)
         return;
 
-    auto const& chrome_data = verify_cast<DragData>(*event.chrome_data);
+    auto const& chrome_data = as<DragData>(*event.chrome_data);
     emit urls_dropped(chrome_data.urls);
 }
 
@@ -861,7 +867,7 @@ void WebContentView::enqueue_native_event(Web::KeyEvent::Type type, QKeyEvent co
 
 void WebContentView::finish_handling_key_event(Web::KeyEvent const& key_event)
 {
-    auto& chrome_data = verify_cast<KeyData>(*key_event.chrome_data);
+    auto& chrome_data = as<KeyData>(*key_event.chrome_data);
     auto& event = *chrome_data.event;
 
     switch (key_event.type) {

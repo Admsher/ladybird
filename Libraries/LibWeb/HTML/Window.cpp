@@ -161,7 +161,7 @@ static TokenizedFeature::NoOpener get_noopener_for_window_open(DOM::Document con
     // 1. If url is not null and url's blob URL entry is not null:
     if (url.has_value() && url->blob_url_entry().has_value()) {
         // 1. Let blobOrigin be url's blob URL entry's environment's origin.
-        auto blob_origin = url->blob_url_entry()->environment_origin;
+        auto blob_origin = url->blob_url_entry()->environment.origin;
 
         // 2. Let topLevelOrigin be sourceDocument's relevant settings object's top-level origin.
         auto top_level_origin = source_document.relevant_settings_object().top_level_origin;
@@ -191,7 +191,7 @@ WebIDL::ExceptionOr<Window::OpenedWindow> Window::window_open_steps_internal(Str
         return OpenedWindow {};
 
     // 2. Let sourceDocument be the entry global object's associated Document.
-    auto& source_document = verify_cast<Window>(entry_global_object()).associated_document();
+    auto& source_document = as<Window>(entry_global_object()).associated_document();
 
     // 3. Let urlRecord be null.
     Optional<URL::URL> url_record;
@@ -758,14 +758,14 @@ JS::ThrowCompletionOr<bool> Window::internal_set_prototype_of(JS::Object* protot
 GC::Ref<WindowProxy> Window::window() const
 {
     // The window, frames, and self getter steps are to return this's relevant realm.[[GlobalEnv]].[[GlobalThisValue]].
-    return verify_cast<WindowProxy>(relevant_realm(*this).global_environment().global_this_value());
+    return as<WindowProxy>(relevant_realm(*this).global_environment().global_this_value());
 }
 
 // https://html.spec.whatwg.org/multipage/window-object.html#dom-self
 GC::Ref<WindowProxy> Window::self() const
 {
     // The window, frames, and self getter steps are to return this's relevant realm.[[GlobalEnv]].[[GlobalThisValue]].
-    return verify_cast<WindowProxy>(relevant_realm(*this).global_environment().global_this_value());
+    return as<WindowProxy>(relevant_realm(*this).global_environment().global_this_value());
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-document-2
@@ -824,7 +824,7 @@ void Window::close()
     // 5. Let sourceSnapshotParams be the result of snapshotting source snapshot params given thisTraversable's active document.
     auto source_snapshot_params = traversable->active_document()->snapshot_source_snapshot_params();
 
-    auto& incumbent_global_object = verify_cast<HTML::Window>(HTML::incumbent_global_object());
+    auto& incumbent_global_object = as<HTML::Window>(HTML::incumbent_global_object());
 
     // 6. If all the following are true:
     if (
@@ -843,7 +843,7 @@ void Window::close()
 
         // 2. Queue a task on the DOM manipulation task source to definitely close thisTraversable.
         HTML::queue_global_task(HTML::Task::Source::DOMManipulation, incumbent_global_object, GC::create_function(heap(), [traversable] {
-            verify_cast<TraversableNavigable>(*traversable).definitely_close_top_level_traversable();
+            as<TraversableNavigable>(*traversable).definitely_close_top_level_traversable();
         }));
     }
 }
@@ -929,7 +929,7 @@ void Window::blur()
 GC::Ref<WindowProxy> Window::frames() const
 {
     // The window, frames, and self getter steps are to return this's relevant realm.[[GlobalEnv]].[[GlobalThisValue]].
-    return verify_cast<WindowProxy>(relevant_realm(*this).global_environment().global_this_value());
+    return as<WindowProxy>(relevant_realm(*this).global_environment().global_this_value());
 }
 
 // https://html.spec.whatwg.org/multipage/window-object.html#dom-length
@@ -1105,11 +1105,11 @@ WebIDL::ExceptionOr<void> Window::window_post_message_steps(JS::Value message, W
         auto parsed_url = DOMURL::parse(options.target_origin);
 
         // 2. If parsedURL is failure, then throw a "SyntaxError" DOMException.
-        if (!parsed_url.is_valid())
+        if (!parsed_url.has_value())
             return WebIDL::SyntaxError::create(target_realm, MUST(String::formatted("Invalid URL for targetOrigin: '{}'", options.target_origin)));
 
         // 3. Set targetOrigin to parsedURL's origin.
-        target_origin = parsed_url.origin();
+        target_origin = parsed_url->origin();
     }
 
     // 6. Let transfer be options["transfer"].
@@ -1133,10 +1133,10 @@ WebIDL::ExceptionOr<void> Window::window_post_message_steps(JS::Value message, W
         auto origin = incumbent_settings.origin().serialize();
 
         // 3. Let source be the WindowProxy object corresponding to incumbentSettings's global object (a Window object).
-        auto& source = verify_cast<WindowProxy>(incumbent_settings.realm().global_environment().global_this_value());
+        auto& source = as<WindowProxy>(incumbent_settings.realm().global_environment().global_this_value());
 
         // 4. Let deserializeRecord be StructuredDeserializeWithTransfer(serializeWithTransferResult, targetRealm).
-        auto temporary_execution_context = TemporaryExecutionContext { target_realm };
+        auto temporary_execution_context = TemporaryExecutionContext { target_realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
         auto deserialize_record_or_error = structured_deserialize_with_transfer(vm(), serialize_with_transfer_result);
 
         // If this throws an exception, catch it, fire an event named messageerror at targetWindow, using MessageEvent,
@@ -1161,7 +1161,7 @@ WebIDL::ExceptionOr<void> Window::window_post_message_steps(JS::Value message, W
         Vector<GC::Root<MessagePort>> new_ports;
         for (auto const& object : deserialize_record.transferred_values) {
             if (is<HTML::MessagePort>(*object)) {
-                new_ports.append(verify_cast<MessagePort>(*object));
+                new_ports.append(as<MessagePort>(*object));
             }
         }
 

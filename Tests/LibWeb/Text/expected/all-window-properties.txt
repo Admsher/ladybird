@@ -10,6 +10,7 @@ AnimationPlaybackEvent
 AnimationTimeline
 Array
 ArrayBuffer
+AsyncDisposableStack
 Attr
 Audio
 AudioBuffer
@@ -234,6 +235,7 @@ ManagedSourceBuffer
 Map
 MathMLElement
 MediaCapabilities
+MediaElementAudioSourceNode
 MediaError
 MediaList
 MediaQueryList
@@ -360,6 +362,7 @@ SharedArrayBuffer
 SourceBuffer
 SourceBufferList
 StaticRange
+StereoPannerNode
 Storage
 StorageEvent
 StorageManager

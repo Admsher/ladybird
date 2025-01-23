@@ -302,7 +302,7 @@ static void update(JS::VM& vm, GC::Ref<Job> job)
                 auto resolved_scope = DOMURL::parse("./"sv, job->script_url);
 
                 // 2. Set maxScopeString to "/", followed by the strings in resolvedScope’s path (including empty strings), separated from each other by "/".
-                max_scope_string = join_paths_with_slash(resolved_scope);
+                max_scope_string = join_paths_with_slash(*resolved_scope);
             }
             // 14. Else:
             else {
@@ -310,9 +310,9 @@ static void update(JS::VM& vm, GC::Ref<Job> job)
                 auto max_scope = DOMURL::parse(service_worker_allowed.get<Vector<ByteBuffer>>()[0], job->script_url);
 
                 // 2. If maxScope’s origin is job’s script url's origin, then:
-                if (max_scope.origin().is_same_origin(job->script_url.origin())) {
+                if (max_scope->origin().is_same_origin(job->script_url.origin())) {
                     // 1. Set maxScopeString to "/", followed by the strings in maxScope’s path (including empty strings), separated from each other by "/".
-                    max_scope_string = join_paths_with_slash(max_scope);
+                    max_scope_string = join_paths_with_slash(*max_scope);
                 }
             }
 
@@ -591,7 +591,7 @@ void schedule_job(JS::VM& vm, GC::Ref<Job> job)
 
         // 2. If job is equivalent to lastJob and lastJob’s job promise has not settled, append job to lastJob’s list of equivalent jobs.
         // FIXME: There's no WebIDL AO that corresponds to checking if an ECMAScript promise has settled
-        if (job == last_job && !verify_cast<JS::Promise>(*job->job_promise->promise()).is_handled()) {
+        if (job == last_job && !as<JS::Promise>(*job->job_promise->promise()).is_handled()) {
             last_job->list_of_equivalent_jobs.append(job);
         }
         // 3. Else, set job’s containing job queue to jobQueue, and enqueue job to jobQueue.

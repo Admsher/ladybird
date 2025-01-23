@@ -49,6 +49,13 @@ public:
     void insert_before(GC::Ref<T> node, GC::Ptr<T> child);
     void remove_child(GC::Ref<T> node);
 
+    void replace_child(GC::Ref<T> new_child, GC::Ref<T> old_child);
+    void remove()
+    {
+        VERIFY(m_parent);
+        m_parent->remove_child(*static_cast<T*>(this));
+    }
+
     T* next_in_pre_order()
     {
         if (first_child())
@@ -218,7 +225,7 @@ public:
     {
         for (auto* node = first_child(); node; node = node->next_sibling()) {
             if (is<U>(node)) {
-                if (callback(verify_cast<U>(*node)) == IterationDecision::Break)
+                if (callback(as<U>(*node)) == IterationDecision::Break)
                     return;
             }
         }
@@ -241,7 +248,7 @@ public:
     {
         for (auto* sibling = next_sibling(); sibling; sibling = sibling->next_sibling()) {
             if (is<U>(*sibling))
-                return &verify_cast<U>(*sibling);
+                return &as<U>(*sibling);
         }
         return nullptr;
     }
@@ -257,7 +264,7 @@ public:
     {
         for (auto* sibling = previous_sibling(); sibling; sibling = sibling->previous_sibling()) {
             if (is<U>(*sibling))
-                return &verify_cast<U>(*sibling);
+                return &as<U>(*sibling);
         }
         return nullptr;
     }
@@ -279,7 +286,7 @@ public:
     {
         for (auto* child = first_child(); child; child = child->next_sibling()) {
             if (is<U>(*child))
-                return &verify_cast<U>(*child);
+                return &as<U>(*child);
         }
         return nullptr;
     }
@@ -289,7 +296,7 @@ public:
     {
         for (auto* child = last_child(); child; child = child->previous_sibling()) {
             if (is<U>(*child))
-                return &verify_cast<U>(*child);
+                return &as<U>(*child);
         }
         return nullptr;
     }
@@ -305,7 +312,7 @@ public:
     {
         for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
             if (is<U>(*ancestor))
-                return &verify_cast<U>(*ancestor);
+                return &as<U>(*ancestor);
         }
         return nullptr;
     }
@@ -366,6 +373,28 @@ inline void TreeNode<T>::append_child(GC::Ref<T> node)
     m_last_child = node.ptr();
     if (!m_first_child)
         m_first_child = m_last_child;
+}
+
+template<typename T>
+inline void TreeNode<T>::replace_child(GC::Ref<T> new_child, GC::Ref<T> old_child)
+{
+    VERIFY(old_child != new_child);
+    VERIFY(old_child->m_parent == this);
+    VERIFY(new_child->m_parent == nullptr);
+    if (m_first_child == old_child)
+        m_first_child = new_child;
+    if (m_last_child == old_child)
+        m_last_child = new_child;
+    new_child->m_next_sibling = old_child->m_next_sibling;
+    if (new_child->m_next_sibling)
+        new_child->m_next_sibling->m_previous_sibling = new_child;
+    new_child->m_previous_sibling = old_child->m_previous_sibling;
+    if (new_child->m_previous_sibling)
+        new_child->m_previous_sibling->m_next_sibling = new_child;
+    new_child->m_parent = old_child->m_parent;
+    old_child->m_next_sibling = nullptr;
+    old_child->m_previous_sibling = nullptr;
+    old_child->m_parent = nullptr;
 }
 
 template<typename T>

@@ -82,6 +82,7 @@ set(SOURCES
     CSS/GridTrackPlacement.cpp
     CSS/GridTrackSize.cpp
     CSS/Interpolation.cpp
+    CSS/InvalidationSet.cpp
     CSS/Length.cpp
     CSS/LengthBox.cpp
     CSS/MediaList.cpp
@@ -116,6 +117,7 @@ set(SOURCES
     CSS/Sizing.cpp
     CSS/StyleComputer.cpp
     CSS/StyleInvalidation.cpp
+    CSS/StyleInvalidationData.cpp
     CSS/StyleProperty.cpp
     CSS/StyleSheet.cpp
     CSS/StyleSheetIdentifier.cpp
@@ -800,10 +802,12 @@ set(SOURCES
     WebAudio/DelayNode.cpp
     WebAudio/DynamicsCompressorNode.cpp
     WebAudio/GainNode.cpp
+    WebAudio/MediaElementAudioSourceNode.cpp
     WebAudio/OfflineAudioContext.cpp
     WebAudio/OscillatorNode.cpp
     WebAudio/PannerNode.cpp
     WebAudio/PeriodicWave.cpp
+    WebAudio/StereoPannerNode.cpp
     WebDriver/Actions.cpp
     WebDriver/Capabilities.cpp
     WebDriver/Client.cpp
@@ -819,7 +823,10 @@ set(SOURCES
     WebDriver/Response.cpp
     WebDriver/Screenshot.cpp
     WebDriver/TimeoutsConfiguration.cpp
-    WebGL/ANGLEInstancedArrays.cpp
+    WebGL/Extensions/ANGLEInstancedArrays.cpp
+    WebGL/Extensions/OESVertexArrayObject.cpp
+    WebGL/Extensions/WebGLDrawBuffers.cpp
+    WebGL/Extensions/WebGLVertexArrayObjectOES.cpp
     WebGL/EventNames.cpp
     WebGL/OpenGLContext.cpp
     WebGL/WebGL2RenderingContext.cpp

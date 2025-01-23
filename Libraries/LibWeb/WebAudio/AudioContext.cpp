@@ -136,7 +136,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> AudioContext::resume()
     auto& realm = this->realm();
 
     // 1. If this's relevant global object's associated Document is not fully active then return a promise rejected with "InvalidStateError" DOMException.
-    auto const& associated_document = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
+    auto const& associated_document = as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
     if (!associated_document.is_fully_active())
         return WebIDL::InvalidStateError::create(realm, "Document is not fully active"_string);
 
@@ -228,7 +228,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> AudioContext::suspend()
     auto& realm = this->realm();
 
     // 1. If this's relevant global object's associated Document is not fully active then return a promise rejected with "InvalidStateError" DOMException.
-    auto const& associated_document = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
+    auto const& associated_document = as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
     if (!associated_document.is_fully_active())
         return WebIDL::InvalidStateError::create(realm, "Document is not fully active"_string);
 
@@ -287,7 +287,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> AudioContext::close()
     auto& realm = this->realm();
 
     // 1. If this's relevant global object's associated Document is not fully active then return a promise rejected with "InvalidStateError" DOMException.
-    auto const& associated_document = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
+    auto const& associated_document = as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
     if (!associated_document.is_fully_active())
         return WebIDL::InvalidStateError::create(realm, "Document is not fully active"_string);
 
@@ -340,6 +340,14 @@ bool AudioContext::start_rendering_audio_graph()
 {
     bool render_result = true;
     return render_result;
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-audiocontext-createmediaelementsource
+WebIDL::ExceptionOr<GC::Ref<MediaElementAudioSourceNode>> AudioContext::create_media_element_source(GC::Ptr<HTML::HTMLMediaElement> media_element)
+{
+    MediaElementAudioSourceOptions options;
+    options.media_element = media_element;
+    return MediaElementAudioSourceNode::create(realm(), *this, options);
 }
 
 }

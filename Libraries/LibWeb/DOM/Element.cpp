@@ -462,7 +462,7 @@ void Element::run_attribute_change_steps(FlyString const& local_name, Optional<S
     attribute_changed(local_name, old_value, value, namespace_);
 
     if (old_value != value) {
-        invalidate_style_after_attribute_change(local_name);
+        invalidate_style_after_attribute_change(local_name, old_value, value);
         document().bump_dom_tree_version();
     }
 }
@@ -793,11 +793,11 @@ WebIDL::ExceptionOr<void> Element::set_inner_html(StringView value)
     DOM::Node* context = this;
 
     // 3. Let fragment be the result of invoking the fragment parsing algorithm steps with context and compliantString. FIXME: Use compliantString.
-    auto fragment = TRY(verify_cast<Element>(*context).parse_fragment(value));
+    auto fragment = TRY(as<Element>(*context).parse_fragment(value));
 
     // 4. If context is a template element, then set context to the template element's template contents (a DocumentFragment).
     if (is<HTML::HTMLTemplateElement>(*context))
-        context = verify_cast<HTML::HTMLTemplateElement>(*context).content();
+        context = as<HTML::HTMLTemplateElement>(*context).content();
 
     // 5. Replace all with fragment within context.
     context->replace_all(fragment);
@@ -808,7 +808,7 @@ WebIDL::ExceptionOr<void> Element::set_inner_html(StringView value)
 
         if (context->is_connected()) {
             // NOTE: Since the DOM has changed, we have to rebuild the layout tree.
-            context->document().invalidate_layout_tree();
+            context->set_needs_layout_tree_update(true);
         }
     }
 
@@ -927,7 +927,7 @@ GC::Ref<Geometry::DOMRect> Element::get_bounding_client_rect() const
         auto const& rect = list->item(i);
         if (rect->width() == 0 || rect->height() == 0)
             continue;
-        bounding_rect = bounding_rect.united({ rect->x(), rect->y(), rect->width(), rect->height() });
+        bounding_rect.unite({ rect->x(), rect->y(), rect->width(), rect->height() });
     }
     return Geometry::DOMRect::create(realm(), bounding_rect.to_type<float>());
 }
@@ -1140,6 +1140,46 @@ bool Element::affected_by_hover() const
         }
     }
     return false;
+}
+
+bool Element::affected_by_invalidation_property(CSS::InvalidationSet::Property const& property) const
+{
+    switch (property.type) {
+    case CSS::InvalidationSet::Property::Type::Class:
+        return m_classes.contains_slow(property.name());
+    case CSS::InvalidationSet::Property::Type::Id:
+        return m_id == property.name();
+    case CSS::InvalidationSet::Property::Type::TagName:
+        return local_name() == property.name();
+    case CSS::InvalidationSet::Property::Type::Attribute: {
+        if (property.name() == HTML::AttributeNames::id || property.name() == HTML::AttributeNames::class_)
+            return true;
+        return has_attribute(property.name());
+    }
+    case CSS::InvalidationSet::Property::Type::PseudoClass: {
+        switch (property.value.get<CSS::PseudoClass>()) {
+        case CSS::PseudoClass::Enabled: {
+            return (is<HTML::HTMLButtonElement>(*this) || is<HTML::HTMLInputElement>(*this) || is<HTML::HTMLSelectElement>(*this) || is<HTML::HTMLTextAreaElement>(*this) || is<HTML::HTMLOptGroupElement>(*this) || is<HTML::HTMLOptionElement>(*this) || is<HTML::HTMLFieldSetElement>(*this))
+                && !is_actually_disabled();
+        }
+        case CSS::PseudoClass::Disabled: {
+            return is_actually_disabled();
+        }
+        case CSS::PseudoClass::Checked: {
+            // FIXME: This could be narrowed down to return true only if element is actually checked.
+            return is<HTML::HTMLInputElement>(*this) || is<HTML::HTMLOptionElement>(*this);
+        }
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    }
+    case CSS::InvalidationSet::Property::Type::InvalidateSelf:
+        return false;
+    case CSS::InvalidationSet::Property::Type::InvalidateWholeSubtree:
+        return true;
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
 bool Element::has_pseudo_elements() const
@@ -1587,7 +1627,7 @@ WebIDL::ExceptionOr<void> Element::set_outer_html(String const& value)
         parent = TRY(create_element(document(), HTML::TagNames::body, Namespace::HTML));
 
     // 6. Let fragment be the result of invoking the fragment parsing algorithm steps given parent and compliantString. FIXME: Use compliantString.
-    auto fragment = TRY(verify_cast<Element>(*parent).parse_fragment(value));
+    auto fragment = TRY(as<Element>(*parent).parse_fragment(value));
 
     // 6. Replace this with fragment within this's parent.
     TRY(parent->replace_child(fragment, *this));
@@ -1638,7 +1678,7 @@ WebIDL::ExceptionOr<void> Element::insert_adjacent_html(String const& position, 
     }
 
     // 4. Let fragment be the result of invoking the fragment parsing algorithm steps with context and string.
-    auto fragment = TRY(verify_cast<Element>(*context).parse_fragment(string));
+    auto fragment = TRY(as<Element>(*context).parse_fragment(string));
 
     // 5. Use the first matching item from this list:
 
@@ -1716,7 +1756,7 @@ WebIDL::ExceptionOr<GC::Ptr<Element>> Element::insert_adjacent_element(String co
     auto returned_node = TRY(insert_adjacent(where, element));
     if (!returned_node)
         return GC::Ptr<Element> { nullptr };
-    return GC::Ptr<Element> { verify_cast<Element>(*returned_node) };
+    return GC::Ptr<Element> { as<Element>(*returned_node) };
 }
 
 // https://dom.spec.whatwg.org/#dom-element-insertadjacenttext
@@ -1928,53 +1968,49 @@ ErrorOr<void> Element::scroll_into_view(Optional<Variant<bool, ScrollIntoViewOpt
     // FIXME: 8. Optionally perform some other action that brings the element to the user’s attention.
 }
 
-static bool attribute_name_may_affect_selectors(Element const& element, FlyString const& attribute_name)
+void Element::invalidate_style_after_attribute_change(FlyString const& attribute_name, Optional<String> const& old_value, Optional<String> const& new_value)
 {
-    // FIXME: We could make these cases more narrow by making the conditions more elaborate.
-    if (attribute_name == HTML::AttributeNames::id
-        || attribute_name == HTML::AttributeNames::class_
-        || attribute_name == HTML::AttributeNames::dir
-        || attribute_name == HTML::AttributeNames::lang
-        || attribute_name == HTML::AttributeNames::checked
-        || attribute_name == HTML::AttributeNames::disabled
-        || attribute_name == HTML::AttributeNames::readonly
-        || attribute_name == HTML::AttributeNames::switch_
-        || attribute_name == HTML::AttributeNames::href
-        || attribute_name == HTML::AttributeNames::open
-        || attribute_name == HTML::AttributeNames::placeholder) {
-        return true;
+    Vector<CSS::InvalidationSet::Property, 1> changed_properties;
+    ForceSelfStyleInvalidation force_self_invalidation = ForceSelfStyleInvalidation::No;
+    if (is_presentational_hint(attribute_name)) {
+        force_self_invalidation = ForceSelfStyleInvalidation::Yes;
     }
 
-    return element.document().style_computer().has_attribute_selector(attribute_name);
-}
-
-void Element::invalidate_style_after_attribute_change(FlyString const& attribute_name)
-{
-    // FIXME: Only invalidate if the attribute can actually affect style.
-
-    // OPTIMIZATION: For the `style` attribute, unless it's referenced by an attribute selector,
-    //               only invalidate the element itself, then let inheritance propagate to descendants.
     if (attribute_name == HTML::AttributeNames::style) {
-        if (!document().style_computer().has_attribute_selector(HTML::AttributeNames::style)) {
-            set_needs_style_update(true);
-            for_each_shadow_including_descendant([](Node& node) {
-                if (!node.is_element())
-                    return TraversalDecision::Continue;
-                auto& element = static_cast<Element&>(node);
-                element.set_needs_inherited_style_update(true);
-                return TraversalDecision::Continue;
-            });
-        } else {
-            invalidate_style(StyleInvalidationReason::ElementAttributeChange);
+        force_self_invalidation = ForceSelfStyleInvalidation::Yes;
+    } else if (attribute_name == HTML::AttributeNames::class_) {
+        Vector<StringView> old_classes;
+        Vector<StringView> new_classes;
+        if (old_value.has_value())
+            old_classes = old_value->bytes_as_string_view().split_view_if(Infra::is_ascii_whitespace);
+        if (new_value.has_value())
+            new_classes = new_value->bytes_as_string_view().split_view_if(Infra::is_ascii_whitespace);
+        for (auto& old_class : old_classes) {
+            if (!new_classes.contains_slow(old_class)) {
+                changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Class, .value = FlyString::from_utf8_without_validation(old_class.bytes()) });
+            }
         }
-        return;
+        for (auto& new_class : new_classes) {
+            if (!old_classes.contains_slow(new_class)) {
+                changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Class, .value = FlyString::from_utf8_without_validation(new_class.bytes()) });
+            }
+        }
+    } else if (attribute_name == HTML::AttributeNames::id) {
+        if (old_value.has_value())
+            changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Id, .value = FlyString(old_value.value()) });
+        if (new_value.has_value())
+            changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Id, .value = FlyString(new_value.value()) });
+    } else if (attribute_name == HTML::AttributeNames::disabled) {
+        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Disabled });
+        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Enabled });
+    } else if (attribute_name == HTML::AttributeNames::placeholder) {
+        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::PlaceholderShown });
+    } else if (attribute_name == HTML::AttributeNames::value) {
+        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Checked });
     }
 
-    if (is_presentational_hint(attribute_name)
-        || attribute_name_may_affect_selectors(*this, attribute_name)) {
-        invalidate_style(StyleInvalidationReason::ElementAttributeChange);
-        return;
-    }
+    changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Attribute, .value = attribute_name });
+    invalidate_style(StyleInvalidationReason::ElementAttributeChange, changed_properties, force_self_invalidation);
 }
 
 bool Element::is_hidden() const
@@ -3061,7 +3097,7 @@ WebIDL::ExceptionOr<void> Element::set_html_unsafe(StringView html)
     // 2. Let target be this's template contents if this is a template element; otherwise this.
     DOM::Node* target = this;
     if (is<HTML::HTMLTemplateElement>(*this))
-        target = verify_cast<HTML::HTMLTemplateElement>(*this).content().ptr();
+        target = as<HTML::HTMLTemplateElement>(*this).content().ptr();
 
     // 3. Unsafe set HTML given target, this, and compliantHTML. FIXME: Use compliantHTML.
     TRY(target->unsafely_set_html(*this, html));

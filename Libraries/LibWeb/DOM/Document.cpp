@@ -79,6 +79,7 @@
 #include <LibWeb/HTML/AttributeNames.h>
 #include <LibWeb/HTML/BeforeUnloadEvent.h>
 #include <LibWeb/HTML/BrowsingContext.h>
+#include <LibWeb/HTML/BrowsingContextGroup.h>
 #include <LibWeb/HTML/CustomElements/CustomElementDefinition.h>
 #include <LibWeb/HTML/CustomElements/CustomElementReactionNames.h>
 #include <LibWeb/HTML/CustomElements/CustomElementRegistry.h>
@@ -161,77 +162,99 @@ namespace Web::DOM {
 GC_DEFINE_ALLOCATOR(Document);
 
 // https://html.spec.whatwg.org/multipage/origin.html#obtain-browsing-context-navigation
-static GC::Ref<HTML::BrowsingContext> obtain_a_browsing_context_to_use_for_a_navigation_response(
-    HTML::BrowsingContext& browsing_context,
-    HTML::SandboxingFlagSet sandbox_flags,
-    HTML::OpenerPolicy navigation_coop,
-    HTML::OpenerPolicyEnforcementResult coop_enforcement_result)
+static GC::Ref<HTML::BrowsingContext> obtain_a_browsing_context_to_use_for_a_navigation_response(HTML::NavigationParams const& navigation_params)
 {
-    // 1. If browsingContext is not a top-level browsing context, return browsingContext.
+    // 1. Let browsingContext be navigationParams's navigable's active browsing context.
+    auto& browsing_context = *navigation_params.navigable->active_browsing_context();
+
+    // 2. If browsingContext is not a top-level browsing context, return browsingContext.
     if (!browsing_context.is_top_level())
         return browsing_context;
 
-    // 2. If coopEnforcementResult's needs a browsing context group switch is false, then:
-    if (!coop_enforcement_result.needs_a_browsing_context_group_switch) {
+    // 3. Let coopEnforcementResult be navigationParams's COOP enforcement result.
+    auto& coop_enforcement_result = navigation_params.coop_enforcement_result;
+
+    // 4. Let swapGroup be coopEnforcementResult's needs a browsing context group switch.
+    auto swap_group = coop_enforcement_result.needs_a_browsing_context_group_switch;
+
+    // 5. Let sourceOrigin be browsingContext's active document's origin.
+    auto& source_origin = browsing_context.active_document()->origin();
+
+    // 6. Let destinationOrigin be navigationParams's origin.
+    auto& destination_origin = navigation_params.origin;
+
+    // 7. If sourceOrigin is not same site with destinationOrigin:
+    if (!source_origin.is_same_site(destination_origin)) {
+        // FIXME: 1. If either of sourceOrigin or destinationOrigin have a scheme that is not an HTTP(S) scheme
+        //    and the user agent considers it necessary for sourceOrigin and destinationOrigin to be
+        //    isolated from each other (for implementation-defined reasons), optionally set swapGroup to true.
+
+        // FIXME: 2. If navigationParams's user involvement is "browser UI", optionally set swapGroup to true.
+    }
+
+    // FIXME: 8. If browsingContext's group's browsing context set's size is 1, optionally set swapGroup to true.
+
+    // 9. If swapGroup is false, then:
+    if (!swap_group) {
         // 1. If coopEnforcementResult's would need a browsing context group switch due to report-only is true,
+        //    set browsing context's virtual browsing context group ID to a new unique identifier.
         if (coop_enforcement_result.would_need_a_browsing_context_group_switch_due_to_report_only) {
             // FIXME: set browsing context's virtual browsing context group ID to a new unique identifier.
         }
+
         // 2. Return browsingContext.
         return browsing_context;
     }
 
-    // 3. Let newBrowsingContext be the first return value of creating a new top-level browsing context and document
-    auto new_browsing_context = HTML::create_a_new_top_level_browsing_context_and_document(browsing_context.page()).release_value_but_fixme_should_propagate_errors().browsing_context;
+    // 10. Let newBrowsingContext be the first return value of creating a new top-level browsing context and document.
+    auto browsing_context_and_document = MUST(HTML::create_a_new_top_level_browsing_context_and_document(browsing_context.page()));
+    auto new_browsing_context = browsing_context_and_document.browsing_context;
 
-    // FIXME: 4. If navigationCOOP's value is "same-origin-plurs-COEP", then set newBrowsingContext's group's
-    //           cross-origin isolation mode to either "logical" or "concrete". The choice of which is implementation-defined.
+    // 11. Let navigationCOOP be navigationParams's cross-origin opener policy.
+    auto navigation_coop = navigation_params.opener_policy;
 
-    // 5. If sandboxFlags is not empty, then:
+    // FIXME: 12. If navigationCOOP's value is "same-origin-plus-COEP", then set newBrowsingContext's group's cross-origin
+    //     isolation mode to either "logical" or "concrete". The choice of which is implementation-defined.
+
+    // 13. Let sandboxFlags be a clone of navigationParams's final sandboxing flag set.
+    auto sandbox_flags = navigation_params.final_sandboxing_flag_set;
+
+    // 14. If sandboxFlags is not empty, then:
     if (!is_empty(sandbox_flags)) {
-        // 1. Assert navigationCOOP's value is "unsafe-none".
+        // 1. Assert: navigationCOOP's value is "unsafe-none".
         VERIFY(navigation_coop.value == HTML::OpenerPolicyValue::UnsafeNone);
 
         // 2. Assert: newBrowsingContext's popup sandboxing flag set is empty.
         VERIFY(is_empty(new_browsing_context->popup_sandboxing_flag_set()));
 
-        // 3. Set newBrowsingContext's popup sandboxing flag set to a clone of sandboxFlags.
+        // 3. Set newBrowsingContext's popup sandboxing flag set to sandboxFlags.
         new_browsing_context->set_popup_sandboxing_flag_set(sandbox_flags);
     }
 
-    // 6. Return newBrowsingContext.
+    // 15. Return newBrowsingContext.
     return new_browsing_context;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#initialise-the-document-object
 WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type, String content_type, HTML::NavigationParams const& navigation_params)
 {
-    // 1. Let browsingContext be navigationParams's navigable's active browsing context.
-    auto browsing_context = navigation_params.navigable->active_browsing_context();
+    // 1. Let browsingContext be the result of obtaining a browsing context to use for a navigation response given navigationParams.
+    auto browsing_context = obtain_a_browsing_context_to_use_for_a_navigation_response(navigation_params);
 
-    // 2. Set browsingContext to the result of the obtaining a browsing context to use for a navigation response given browsingContext, navigationParams's final sandboxing flag set,
-    //    navigationParams's opener policy, and navigationParams's COOP enforcement result.
-    browsing_context = obtain_a_browsing_context_to_use_for_a_navigation_response(
-        *browsing_context,
-        navigation_params.final_sandboxing_flag_set,
-        navigation_params.opener_policy,
-        navigation_params.coop_enforcement_result);
+    // FIXME: 2. Let permissionsPolicy be the result of creating a permissions policy from a response given navigationParams's navigable's container, navigationParams's origin, and navigationParams's response.
 
-    // FIXME: 3. Let permissionsPolicy be the result of creating a permissions policy from a response
-    //           given browsingContext, navigationParams's origin, and navigationParams's response.
-
-    // 4. Let creationURL be navigationParams's response's URL.
+    // 3. Let creationURL be navigationParams's response's URL.
     auto creation_url = navigation_params.response->url();
 
-    // 5. If navigationParams's request is non-null, then set creationURL to navigationParams's request's current URL.
+    // 4. If navigationParams's request is non-null, then set creationURL to navigationParams's request's current URL.
     if (navigation_params.request) {
         creation_url = navigation_params.request->current_url();
     }
 
-    // 6. Let window be null.
+    // 5. Let window be null.
     GC::Ptr<HTML::Window> window;
 
-    // 7. If browsingContext's active document's is initial about:blank is true,
+    // 6. If browsingContext's active document's is initial about:blank is true,
     //    and browsingContext's active document's origin is same origin-domain with navigationParams's origin,
     //    then set window to browsingContext's active window.
     // FIXME: still_on_its_initial_about_blank_document() is not in the spec anymore.
@@ -243,7 +266,7 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
         window = browsing_context->active_window();
     }
 
-    // 8. Otherwise:
+    // 7. Otherwise:
     else {
         // FIXME: 1. Let oacHeader be the result of getting a structured field value given `Origin-Agent-Cluster` and "item" from response's header list.
 
@@ -268,7 +291,7 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
             });
 
         // 6. Set window to the global object of realmExecutionContext's Realm component.
-        window = verify_cast<HTML::Window>(realm_execution_context->realm->global_object());
+        window = as<HTML::Window>(realm_execution_context->realm->global_object());
 
         // 7. Let topLevelCreationURL be creationURL.
         auto top_level_creation_url = creation_url;
@@ -288,7 +311,7 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
             top_level_origin = parent_environment.top_level_origin;
         }
 
-        // 9. Set up a window environment settings object with creationURL, realm execution context,
+        // 10. Set up a window environment settings object with creationURL, realm execution context,
         //    navigationParams's reserved environment, topLevelCreationURL, and topLevelOrigin.
 
         // FIXME: Why do we assume `creation_url` is non-empty here? Is this a spec bug?
@@ -302,24 +325,24 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
             top_level_origin);
     }
 
-    // FIXME: 9. Let loadTimingInfo be a new document load timing info with its navigation start time set to navigationParams's response's timing info's start time.
+    // FIXME: 8. Let loadTimingInfo be a new document load timing info with its navigation start time set to navigationParams's response's timing info's start time.
 
-    // 10. Let document be a new Document, with
-    //     type: type
-    //     content type: contentType
-    //     origin: navigationParams's origin
-    //     browsing context: browsingContext
-    //     policy container: navigationParams's policy container
-    //     FIXME: permissions policy: permissionsPolicy
-    //     active sandboxing flag set: navigationParams's final sandboxing flag set
-    //     FIXME: opener policy: navigationParams's opener policy
-    //     FIXME: load timing info: loadTimingInfo
-    //     FIXME: was created via cross-origin redirects: navigationParams's response's has cross-origin redirects
-    //     during-loading navigation ID for WebDriver BiDi: navigationParams's id
-    //     URL: creationURL
-    //     current document readiness: "loading"
-    //     about base URL: navigationParams's about base URL
-    //     allow declarative shadow roots: true
+    // 9. Let document be a new Document, with
+    //    type: type
+    //    content type: contentType
+    //    origin: navigationParams's origin
+    //    browsing context: browsingContext
+    //    policy container: navigationParams's policy container
+    //    FIXME: permissions policy: permissionsPolicy
+    //    active sandboxing flag set: navigationParams's final sandboxing flag set
+    //    FIXME: opener policy: navigationParams's opener policy
+    //    FIXME: load timing info: loadTimingInfo
+    //    FIXME: was created via cross-origin redirects: navigationParams's response's has cross-origin redirects
+    //    during-loading navigation ID for WebDriver BiDi: navigationParams's id
+    //    URL: creationURL
+    //    current document readiness: "loading"
+    //    about base URL: navigationParams's about base URL
+    //    allow declarative shadow roots: true
     auto document = HTML::HTMLDocument::create(window->realm());
     document->m_type = type;
     document->m_content_type = move(content_type);
@@ -339,12 +362,12 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     if (auto maybe_last_modified = navigation_params.response->header_list()->get("Last-Modified"sv.bytes()); maybe_last_modified.has_value())
         document->m_last_modified = Core::DateTime::parse("%a, %d %b %Y %H:%M:%S %Z"sv, maybe_last_modified.value());
 
-    // 11. Set window's associated Document to document.
+    // 10. Set window's associated Document to document.
     window->set_associated_document(*document);
 
-    // FIXME: 12. Run CSP initialization for a Document given document.
+    // FIXME: 11. Run CSP initialization for a Document given document.
 
-    // 13. If navigationParams's request is non-null, then:
+    // 12. If navigationParams's request is non-null, then:
     if (navigation_params.request) {
         // 1. Set document's referrer to the empty string.
         document->m_referrer = String {};
@@ -358,12 +381,12 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
         }
     }
 
-    // FIXME: 14: If navigationParams's fetch controller is not null, then:
+    // FIXME: 13: If navigationParams's fetch controller is not null, then:
 
-    // FIXME: 15. Create the navigation timing entry for document, with navigationParams's response's timing info, redirectCount, navigationParams's navigation timing type, and
+    // FIXME: 14. Create the navigation timing entry for document, with navigationParams's response's timing info, redirectCount, navigationParams's navigation timing type, and
     //            navigationParams's response's service worker timing info.
 
-    // 16. If navigationParams's response has a `Refresh` header, then:
+    // 15. If navigationParams's response has a `Refresh` header, then:
     if (auto maybe_refresh = navigation_params.response->header_list()->get("Refresh"sv.bytes()); maybe_refresh.has_value()) {
         // 1. Let value be the isomorphic decoding of the value of the header.
         auto value = Infra::isomorphic_decode(maybe_refresh.value());
@@ -372,11 +395,11 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
         document->shared_declarative_refresh_steps(value, nullptr);
     }
 
-    // FIXME: 17. If navigationParams's commit early hints is not null, then call navigationParams's commit early hints with document.
+    // FIXME: 16. If navigationParams's commit early hints is not null, then call navigationParams's commit early hints with document.
 
-    // FIXME: 18. Process link headers given document, navigationParams's response, and "pre-media".
+    // FIXME: 17. Process link headers given document, navigationParams's response, and "pre-media".
 
-    // 19. Return document.
+    // 18. Return document.
     return document;
 }
 
@@ -763,7 +786,7 @@ GC::Ptr<HTML::WindowProxy const> Document::default_view() const
     return const_cast<Document*>(this)->default_view();
 }
 
-URL::Origin Document::origin() const
+URL::Origin const& Document::origin() const
 {
     return m_origin;
 }
@@ -824,7 +847,7 @@ HTML::HTMLHtmlElement* Document::html_element()
     // The html element of a document is its document element, if it's an html element, and null otherwise.
     auto* html = document_element();
     if (is<HTML::HTMLHtmlElement>(html))
-        return verify_cast<HTML::HTMLHtmlElement>(html);
+        return as<HTML::HTMLHtmlElement>(html);
     return nullptr;
 }
 
@@ -1009,6 +1032,7 @@ void Document::tear_down_layout_tree()
 {
     m_layout_root = nullptr;
     m_paintable = nullptr;
+    m_needs_full_layout_tree_update = true;
 }
 
 Color Document::background_color() const
@@ -1104,7 +1128,7 @@ URL::URL Document::parse_url(StringView url) const
     auto base_url = this->base_url();
 
     // 2. Return the result of applying the URL parser to url, with baseURL.
-    return DOMURL::parse(url, base_url);
+    return DOMURL::parse(url, base_url).value_or(URL::URL {});
 }
 
 // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#encoding-parsing-a-url
@@ -1121,7 +1145,7 @@ URL::URL Document::encoding_parse_url(StringView url) const
     auto base_url = this->base_url();
 
     // 5. Return the result of applying the URL parser to url, with baseURL and encoding.
-    return DOMURL::parse(url, base_url, encoding);
+    return DOMURL::parse(url, base_url, encoding).value_or(URL::URL {});
 }
 
 // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#encoding-parsing-and-serializing-a-url
@@ -1218,14 +1242,16 @@ void Document::update_layout()
     auto* document_element = this->document_element();
     auto viewport_rect = navigable->viewport_rect();
 
-    if (!m_layout_root) {
+    if (!m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update()) {
         Layout::TreeBuilder tree_builder;
-        m_layout_root = verify_cast<Layout::Viewport>(*tree_builder.build(*this));
+        m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
 
         if (document_element && document_element->layout_node()) {
             propagate_overflow_to_viewport(*document_element, *m_layout_root);
             propagate_scrollbar_width_to_viewport(*document_element, *m_layout_root);
         }
+
+        set_needs_full_layout_tree_update(false);
     }
 
     // Assign each box that establishes a formatting context a list of absolutely positioned children it should take care of during layout
@@ -1263,7 +1289,7 @@ void Document::update_layout()
         viewport_state.set_content_height(viewport_rect.height());
 
         if (document_element && document_element->layout_node()) {
-            auto& icb_state = layout_state.get_mutable(verify_cast<Layout::NodeWithStyleAndBoxModelMetrics>(*document_element->layout_node()));
+            auto& icb_state = layout_state.get_mutable(as<Layout::NodeWithStyleAndBoxModelMetrics>(*document_element->layout_node()));
             icb_state.set_content_width(viewport_rect.width());
         }
 
@@ -1744,7 +1770,7 @@ GC::Ref<NodeList> Document::get_elements_by_name(FlyString const& name)
     return LiveNodeList::create(realm(), *this, LiveNodeList::Scope::Descendants, [name](auto const& node) {
         if (!is<HTML::HTMLElement>(node))
             return false;
-        return verify_cast<HTML::HTMLElement>(node).name() == name;
+        return as<HTML::HTMLElement>(node).name() == name;
     });
 }
 
@@ -2205,7 +2231,7 @@ WebIDL::ExceptionOr<GC::Ref<Node>> Document::adopt_node_binding(GC::Ref<Node> no
     if (is<ShadowRoot>(*node))
         return WebIDL::HierarchyRequestError::create(realm(), "Cannot adopt a shadow root into a document"_string);
 
-    if (is<DocumentFragment>(*node) && verify_cast<DocumentFragment>(*node).host())
+    if (is<DocumentFragment>(*node) && as<DocumentFragment>(*node).host())
         return node;
 
     adopt_node(*node);
@@ -2236,7 +2262,7 @@ void Document::update_active_element()
     Node* candidate = focused_element();
 
     // 2. Set candidate to the result of retargeting candidate against this DocumentOrShadowRoot.
-    candidate = verify_cast<Node>(retarget(candidate, this));
+    candidate = as<Node>(retarget(candidate, this));
 
     // 3. If candidate's root is not this DocumentOrShadowRoot, then return null.
     if (&candidate->root() != this) {
@@ -2246,7 +2272,7 @@ void Document::update_active_element()
 
     // 4. If candidate is not a Document object, then return candidate.
     if (!is<Document>(candidate)) {
-        set_active_element(verify_cast<Element>(candidate));
+        set_active_element(as<Element>(candidate));
         return;
     }
 
@@ -2527,7 +2553,7 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
 void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::Animation> animation)
 {
     if (animation->is_css_transition()) {
-        dispatch_events_for_transition(verify_cast<CSS::CSSTransition>(*animation));
+        dispatch_events_for_transition(as<CSS::CSSTransition>(*animation));
         return;
     }
 
@@ -2538,7 +2564,7 @@ void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::An
     if (!effect || !effect->is_keyframe_effect() || !animation->is_css_animation() || animation->pending())
         return;
 
-    auto& css_animation = verify_cast<CSS::CSSAnimation>(*animation);
+    auto& css_animation = as<CSS::CSSAnimation>(*animation);
 
     GC::Ptr<Element> target = effect->target();
     if (!target)
@@ -3493,7 +3519,7 @@ GC::Ptr<HTML::CustomElementDefinition> Document::lookup_custom_element_definitio
         return nullptr;
 
     // 3. Let registry be document's relevant global object's custom element registry.
-    auto registry = verify_cast<HTML::Window>(relevant_global_object(*this)).custom_elements();
+    auto registry = as<HTML::Window>(relevant_global_object(*this)).custom_elements();
 
     // 4. If registry's custom element definition set contains an item with name and local name both equal to localName, then return that item.
     auto converted_local_name = local_name.to_string();
@@ -3601,7 +3627,7 @@ HTML::SourceSnapshotParams Document::snapshot_source_snapshot_params() const
     //     sourceDocument's policy container
 
     return HTML::SourceSnapshotParams {
-        .has_transient_activation = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).has_transient_activation(),
+        .has_transient_activation = as<HTML::Window>(HTML::relevant_global_object(*this)).has_transient_activation(),
         .sandboxing_flags = m_active_sandboxing_flag_set,
         .allows_downloading = !has_flag(m_active_sandboxing_flag_set, HTML::SandboxingFlagSet::SandboxedDownloads),
         .fetch_client = relevant_settings_object(),
@@ -3969,7 +3995,7 @@ void Document::unload(GC::Ptr<Document>)
         m_page_showing = false;
 
         // 2. Fire a page transition event named pagehide at oldDocument's relevant global object with oldDocument's salvageable state.
-        verify_cast<HTML::Window>(relevant_global_object(*this)).fire_a_page_transition_event(HTML::EventNames::pagehide, m_salvageable);
+        as<HTML::Window>(relevant_global_object(*this)).fire_a_page_transition_event(HTML::EventNames::pagehide, m_salvageable);
 
         // 3. Update the visibility state of oldDocument to "hidden".
         update_the_visibility_state(HTML::VisibilityState::Hidden);
@@ -3984,7 +4010,7 @@ void Document::unload(GC::Ptr<Document>)
         // FIXME: The legacy target override flag is currently set by a virtual override of dispatch_event()
         //        We should reorganize this so that the flag appears explicitly here instead.
         auto event = DOM::Event::create(realm(), HTML::EventNames::unload);
-        verify_cast<HTML::Window>(relevant_global_object(*this)).dispatch_event(event);
+        as<HTML::Window>(relevant_global_object(*this)).dispatch_event(event);
     }
 
     // FIXME: 13. If unloadTimingInfo is not null, then set unloadTimingInfo's unload event end time to the current high resolution time given newDocument's relevant global object, coarsened
@@ -4190,7 +4216,7 @@ WebIDL::ExceptionOr<GC::Ref<Attr>> Document::create_attribute_ns(Optional<FlyStr
 void Document::make_active()
 {
     // 1. Let window be document's relevant global object.
-    auto& window = verify_cast<HTML::Window>(HTML::relevant_global_object(*this));
+    auto& window = as<HTML::Window>(HTML::relevant_global_object(*this));
 
     set_window(window);
 
@@ -4517,12 +4543,12 @@ void Document::start_intersection_observing_a_lazy_loading_element(Element& elem
         // - The callback is these steps, with arguments entries and observer:
         auto callback = JS::NativeFunction::create(realm, "", [this](JS::VM& vm) -> JS::ThrowCompletionOr<JS::Value> {
             // For each entry in entries using a method of iteration which does not trigger developer-modifiable array accessors or iteration hooks:
-            auto& entries = verify_cast<JS::Array>(vm.argument(0).as_object());
+            auto& entries = as<JS::Array>(vm.argument(0).as_object());
             auto entries_length = MUST(MUST(entries.get(vm.names.length)).to_length(vm));
 
             for (size_t i = 0; i < entries_length; ++i) {
                 auto property_key = JS::PropertyKey { i };
-                auto& entry = verify_cast<IntersectionObserver::IntersectionObserverEntry>(entries.get_without_side_effects(property_key).as_object());
+                auto& entry = as<IntersectionObserver::IntersectionObserverEntry>(entries.get_without_side_effects(property_key).as_object());
 
                 // 1. Let resumptionSteps be null.
                 GC::Ptr<GC::Function<void()>> resumption_steps;
@@ -4781,7 +4807,7 @@ void Document::update_for_history_step_application(GC::Ref<HTML::SessionHistoryE
     history()->m_length = script_history_length;
 
     // 5. Let navigation be history's relevant global object's navigation API.
-    auto navigation = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).navigation();
+    auto navigation = as<HTML::Window>(HTML::relevant_global_object(*this)).navigation();
 
     // 6. If documentsEntryChanged is true, then:
     // NOTE: documentsEntryChanged can be false for one of two reasons: either we are restoring from bfcache,
@@ -4817,7 +4843,7 @@ void Document::update_for_history_step_application(GC::Ref<HTML::SessionHistoryE
             // FIXME: Initialise hasUAVisualTransition
             HTML::PopStateEventInit popstate_event_init;
             popstate_event_init.state = history()->unsafe_state();
-            auto& relevant_global_object = verify_cast<HTML::Window>(HTML::relevant_global_object(*this));
+            auto& relevant_global_object = as<HTML::Window>(HTML::relevant_global_object(*this));
             auto pop_state_event = HTML::PopStateEvent::create(realm(), "popstate"_fly_string, popstate_event_init);
             relevant_global_object.dispatch_event(pop_state_event);
 
@@ -4948,8 +4974,8 @@ void Document::update_animations_and_send_events(Optional<double> const& timesta
             return true;
         if (!b.animation->effect())
             return false;
-        auto& a_effect = verify_cast<Animations::KeyframeEffect>(*a.animation->effect());
-        auto& b_effect = verify_cast<Animations::KeyframeEffect>(*b.animation->effect());
+        auto& a_effect = as<Animations::KeyframeEffect>(*a.animation->effect());
+        auto& b_effect = as<Animations::KeyframeEffect>(*b.animation->effect());
         return Animations::KeyframeEffect::composite_order(a_effect, b_effect) < 0;
     };
 
@@ -5289,7 +5315,7 @@ GC::RootVector<GC::Ref<Element>> Document::elements_from_point(double x, double 
     if (auto const* paintable_box = this->paintable_box(); paintable_box) {
         (void)paintable_box->hit_test(position, Painting::HitTestType::Exact, [&](Painting::HitTestResult result) {
             auto* dom_node = result.dom_node();
-            if (dom_node && dom_node->is_element())
+            if (dom_node && dom_node->is_element() && result.paintable->visible_for_hit_testing())
                 sequence.append(*static_cast<Element*>(dom_node));
             return TraversalDecision::Continue;
         });
@@ -5652,11 +5678,11 @@ Optional<String> Document::get_style_sheet_source(CSS::StyleSheetIdentifier cons
         if (identifier.dom_element_unique_id.has_value()) {
             if (auto* node = Node::from_unique_id(*identifier.dom_element_unique_id)) {
                 if (node->is_html_style_element()) {
-                    if (auto* sheet = verify_cast<HTML::HTMLStyleElement>(*node).sheet())
+                    if (auto* sheet = as<HTML::HTMLStyleElement>(*node).sheet())
                         return sheet->source_text({});
                 }
                 if (node->is_svg_style_element()) {
-                    if (auto* sheet = verify_cast<SVG::SVGStyleElement>(*node).sheet())
+                    if (auto* sheet = as<SVG::SVGStyleElement>(*node).sheet())
                         return sheet->source_text({});
                 }
             }
@@ -5873,7 +5899,7 @@ void Document::parse_html_from_a_string(StringView html)
     auto parser = HTML::HTMLParser::create(*this, html, "UTF-8"sv);
 
     // 4. Start parser and let it run until it has consumed all the characters just inserted into the input stream.
-    parser->run(verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).associated_document().url());
+    parser->run(as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document().url());
 }
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-parsehtmlunsafe
@@ -6103,7 +6129,7 @@ Document::StepsToFireBeforeunloadResult Document::steps_to_fire_beforeunload(boo
     // 4. Let eventFiringResult be the result of firing an event named beforeunload at document's relevant global object,
     //    using BeforeUnloadEvent, with the cancelable attribute initialized to true.
     auto& global_object = HTML::relevant_global_object(*this);
-    auto& window = verify_cast<HTML::Window>(global_object);
+    auto& window = as<HTML::Window>(global_object);
     auto beforeunload_event = HTML::BeforeUnloadEvent::create(realm(), HTML::EventNames::beforeunload);
     beforeunload_event->set_cancelable(true);
     auto event_firing_result = window.dispatch_event(*beforeunload_event);

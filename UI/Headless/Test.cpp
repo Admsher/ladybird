@@ -140,6 +140,7 @@ void run_dump_test(HeadlessWebView& view, Test& test, URL::URL const& url, int t
         view.on_load_finish = {};
         view.on_text_test_finish = {};
         view.on_set_test_timeout = {};
+        view.reset_zoom();
 
         view.on_test_complete({ test, TestResult::Timeout });
     });
@@ -199,6 +200,7 @@ void run_dump_test(HeadlessWebView& view, Test& test, URL::URL const& url, int t
     };
 
     auto on_test_complete = [&view, &test, timer, handle_completed_test]() {
+        view.reset_zoom();
         clear_test_callbacks(view);
         timer->stop();
 
@@ -268,6 +270,10 @@ void run_dump_test(HeadlessWebView& view, Test& test, URL::URL const& url, int t
         timer->start(milliseconds);
     };
 
+    view.on_set_browser_zoom = [&view](double factor) {
+        view.set_zoom(factor);
+    };
+
     view.load(url);
     timer->start();
 }
@@ -278,6 +284,7 @@ static void run_ref_test(HeadlessWebView& view, Test& test, URL::URL const& url,
         view.on_load_finish = {};
         view.on_text_test_finish = {};
         view.on_set_test_timeout = {};
+        view.reset_zoom();
 
         view.on_test_complete({ test, TestResult::Timeout });
     });
@@ -335,13 +342,15 @@ static void run_ref_test(HeadlessWebView& view, Test& test, URL::URL const& url,
             } else {
                 test.ref_test_expectation_type = RefTestExpectationType::Match;
             }
-            view.take_screenshot()->when_resolved([&test, on_test_complete = move(on_test_complete)](RefPtr<Gfx::Bitmap> screenshot) {
+            view.take_screenshot()->when_resolved([&view, &test, on_test_complete = move(on_test_complete)](RefPtr<Gfx::Bitmap> screenshot) {
                 test.expectation_screenshot = move(screenshot);
+                view.reset_zoom();
                 on_test_complete();
             });
         } else {
             view.take_screenshot()->when_resolved([&view, &test](RefPtr<Gfx::Bitmap> screenshot) {
                 test.actual_screenshot = move(screenshot);
+                view.reset_zoom();
                 view.debug_request("load-reference-page");
             });
         }
@@ -356,6 +365,10 @@ static void run_ref_test(HeadlessWebView& view, Test& test, URL::URL const& url,
             return;
         timer->stop();
         timer->start(milliseconds);
+    };
+
+    view.on_set_browser_zoom = [&view](double factor) {
+        view.set_zoom(factor);
     };
 
     view.load(url);
@@ -379,6 +392,30 @@ static void run_test(HeadlessWebView& view, Test& test, Application& app)
 
     view.on_text_test_finish = {};
 
+    promise->when_resolved([&view, &test, &app](auto) {
+        auto url = URL::create_with_file_scheme(MUST(FileSystem::real_path(test.input_path)));
+
+        switch (test.mode) {
+        case TestMode::Text:
+        case TestMode::Layout:
+            run_dump_test(view, test, url, app.per_test_timeout_in_seconds * 1000);
+            return;
+        case TestMode::Ref:
+            run_ref_test(view, test, url, app.per_test_timeout_in_seconds * 1000);
+            return;
+        case TestMode::Crash:
+            run_dump_test(view, test, url, app.per_test_timeout_in_seconds * 1000);
+            return;
+        }
+
+        VERIFY_NOT_REACHED();
+    });
+
+    view.load("about:blank"sv);
+}
+
+static void set_ui_callbacks_for_tests(HeadlessWebView& view)
+{
     view.on_request_file_picker = [&](auto const& accepted_file_types, auto allow_multiple_files) {
         // Create some dummy files for tests.
         Vector<Web::HTML::SelectedFile> selected_files;
@@ -420,26 +457,10 @@ static void run_test(HeadlessWebView& view, Test& test, Application& app)
         view.file_picker_closed(move(selected_files));
     };
 
-    promise->when_resolved([&view, &test, &app](auto) {
-        auto url = URL::create_with_file_scheme(MUST(FileSystem::real_path(test.input_path)));
-
-        switch (test.mode) {
-        case TestMode::Text:
-        case TestMode::Layout:
-            run_dump_test(view, test, url, app.per_test_timeout_in_seconds * 1000);
-            return;
-        case TestMode::Ref:
-            run_ref_test(view, test, url, app.per_test_timeout_in_seconds * 1000);
-            return;
-        case TestMode::Crash:
-            run_dump_test(view, test, url, app.per_test_timeout_in_seconds * 1000);
-            return;
-        }
-
-        VERIFY_NOT_REACHED();
-    });
-
-    view.load("about:blank"sv);
+    view.on_request_alert = [&](auto const&) {
+        // For tests, just close the alert right away to unblock JS execution.
+        view.alert_closed();
+    };
 }
 
 ErrorOr<void> run_tests(Core::AnonymousBuffer const& theme, Web::DevicePixelSize window_size)
@@ -516,6 +537,7 @@ ErrorOr<void> run_tests(Core::AnonymousBuffer const& theme, Web::DevicePixelSize
     Vector<TestCompletion> non_passing_tests;
 
     app.for_each_web_view([&](auto& view) {
+        set_ui_callbacks_for_tests(view);
         view.clear_content_filters();
 
         auto run_next_test = [&]() {

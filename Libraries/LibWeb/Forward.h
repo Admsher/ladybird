@@ -860,6 +860,13 @@ class WebGLUniformLocation;
 class WebGLVertexArrayObject;
 }
 
+namespace Web::WebGL::Extensions {
+class ANGLEInstancedArrays;
+class OESVertexArrayObject;
+class WebGLDrawBuffers;
+class WebGLVertexArrayObjectOES;
+}
+
 namespace Web::WebIDL {
 class ArrayBufferView;
 class BufferSource;

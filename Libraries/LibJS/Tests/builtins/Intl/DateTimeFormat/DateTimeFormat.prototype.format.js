@@ -111,7 +111,10 @@ describe("dateStyle", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { dateStyle: d.date, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
+                dateStyle: d.date,
+                timeZone: "UTC",
+            });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -133,7 +136,10 @@ describe("timeStyle", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { timeStyle: d.time, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
+                timeStyle: d.time,
+                timeZone: "UTC",
+            });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -170,7 +176,7 @@ describe("dateStyle + timeStyle", () => {
             });
             expect(en.format(d0)).toBe(d.en);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 dateStyle: d.date,
                 timeStyle: d.time,
                 timeZone: "UTC",
@@ -194,7 +200,10 @@ describe("weekday", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { weekday: d.weekday, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
+                weekday: d.weekday,
+                timeZone: "UTC",
+            });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -215,7 +224,7 @@ describe("era", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { era: d.era, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", { era: d.era, timeZone: "UTC" });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -228,7 +237,7 @@ describe("era", () => {
         const en = new Intl.DateTimeFormat("en", { era: "short", timeZone: "UTC" });
         expect(en.format(year1BC)).toBe("1/1/1 BC");
 
-        const ar = new Intl.DateTimeFormat("ar", { era: "short", timeZone: "UTC" });
+        const ar = new Intl.DateTimeFormat("ar-u-nu-arab", { era: "short", timeZone: "UTC" });
         expect(ar.format(year1BC)).toBe("٠١-٠١-١ ق.م");
     });
 });
@@ -246,7 +255,7 @@ describe("year", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { year: d.year, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", { year: d.year, timeZone: "UTC" });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -269,7 +278,7 @@ describe("month", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { month: d.month, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", { month: d.month, timeZone: "UTC" });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -289,7 +298,7 @@ describe("day", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { day: d.day, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", { day: d.day, timeZone: "UTC" });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -299,9 +308,9 @@ describe("day", () => {
 describe("dayPeriod", () => {
     // prettier-ignore
     const data = [
-        { dayPeriod: "narrow", en0: "5 in the afternoon", en1: "7 in the morning", ar0: "٥ بعد الظهر", ar1: "٧ صباحًا", as0: "অপৰাহ্ন ৫", as1: "পূৰ্বাহ্ন ৭"},
-        { dayPeriod: "short", en0: "5 in the afternoon", en1: "7 in the morning", ar0: "٥ بعد الظهر", ar1: "٧ ص", as0: "অপৰাহ্ন ৫", as1: "পূৰ্বাহ্ন ৭"},
-        { dayPeriod: "long", en0: "5 in the afternoon", en1: "7 in the morning", ar0: "٥ بعد الظهر", ar1: "٧ صباحًا", as0: "অপৰাহ্ন ৫", as1: "পূৰ্বাহ্ন ৭"},
+        { dayPeriod: "narrow", en0: "5 in the afternoon", en1: "7 in the morning", ar0: "٥ بعد الظهر", ar1: "٧ صباحًا", as0: "pm ৫", as1: "am ৭"},
+        { dayPeriod: "short", en0: "5 in the afternoon", en1: "7 in the morning", ar0: "٥ بعد الظهر", ar1: "٧ ص", as0: "PM ৫", as1: "AM ৭"},
+        { dayPeriod: "long", en0: "5 in the afternoon", en1: "7 in the morning", ar0: "٥ بعد الظهر", ar1: "٧ صباحًا", as0: "PM ৫", as1: "AM ৭"},
     ];
 
     test("all", () => {
@@ -314,7 +323,7 @@ describe("dayPeriod", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 dayPeriod: d.dayPeriod,
                 hour: "numeric",
                 timeZone: "UTC",
@@ -377,7 +386,7 @@ describe("dayPeriod", () => {
             expect(en.format(date2)).toBe(d.en2);
             expect(en.format(date3)).toBe(d.en3);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 hour: "numeric",
                 dayPeriod: "short",
                 timeZone: "UTC",
@@ -395,9 +404,9 @@ describe("dayPeriod", () => {
     test("dayPeriod without time", () => {
         // prettier-ignore
         const data = [
-            { dayPeriod: "narrow", en0: "in the afternoon", en1: "in the morning", ar0: "بعد الظهر", ar1: "صباحًا", as0: "অপৰাহ্ন", as1: "পূৰ্বাহ্ন"},
-            { dayPeriod: "short", en0: "in the afternoon", en1: "in the morning", ar0: "بعد الظهر", ar1: "ص", as0: "অপৰাহ্ন", as1: "পূৰ্বাহ্ন"},
-            { dayPeriod: "long", en0: "in the afternoon", en1: "in the morning", ar0: "بعد الظهر", ar1: "صباحًا", as0: "অপৰাহ্ন", as1: "পূৰ্বাহ্ন"},
+            { dayPeriod: "narrow", en0: "in the afternoon", en1: "in the morning", ar0: "بعد الظهر", ar1: "صباحًا", as0: "pm", as1: "am"},
+            { dayPeriod: "short", en0: "in the afternoon", en1: "in the morning", ar0: "بعد الظهر", ar1: "ص", as0: "PM", as1: "AM"},
+            { dayPeriod: "long", en0: "in the afternoon", en1: "in the morning", ar0: "بعد الظهر", ar1: "صباحًا", as0: "PM", as1: "AM"},
         ];
 
         data.forEach(d => {
@@ -408,7 +417,7 @@ describe("dayPeriod", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 dayPeriod: d.dayPeriod,
                 timeZone: "UTC",
             });
@@ -438,7 +447,7 @@ describe("hour", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", { hour: d.hour, timeZone: "UTC" });
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", { hour: d.hour, timeZone: "UTC" });
             expect(ar.format(d0)).toBe(d.ar0);
             expect(ar.format(d1)).toBe(d.ar1);
         });
@@ -462,7 +471,7 @@ describe("minute", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 minute: d.minute,
                 hour: "numeric",
                 timeZone: "UTC",
@@ -490,7 +499,7 @@ describe("second", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 second: d.second,
                 minute: "numeric",
                 timeZone: "UTC",
@@ -520,7 +529,7 @@ describe("fractionalSecondDigits", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 fractionalSecondDigits: d.fractionalSecondDigits,
                 second: "numeric",
                 minute: "numeric",
@@ -587,7 +596,7 @@ describe("timeZoneName", () => {
             expect(en.format(d0)).toBe(d.en0);
             expect(en.format(d1)).toBe(d.en1);
 
-            const ar = new Intl.DateTimeFormat("ar", {
+            const ar = new Intl.DateTimeFormat("ar-u-nu-arab", {
                 timeZone: d.timeZone,
                 timeZoneName: d.timeZoneName,
             });
@@ -607,7 +616,7 @@ describe("non-Gregorian calendars", () => {
         expect(en.format(d0)).toBe("3 Tevet 5782 at 5:40:50 PM UTC");
         expect(en.format(d1)).toBe("17 Shevat 5749 at 7:08:09 AM UTC");
 
-        const ar = new Intl.DateTimeFormat("ar-u-ca-hebrew", {
+        const ar = new Intl.DateTimeFormat("ar-u-nu-arab-ca-hebrew", {
             dateStyle: "long",
             timeStyle: "long",
             timeZone: "UTC",

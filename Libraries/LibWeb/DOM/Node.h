@@ -14,6 +14,7 @@
 #include <AK/RefPtr.h>
 #include <AK/TypeCasts.h>
 #include <AK/Vector.h>
+#include <LibWeb/CSS/InvalidationSet.h>
 #include <LibWeb/DOM/AccessibilityTreeNode.h>
 #include <LibWeb/DOM/EventTarget.h>
 #include <LibWeb/DOM/Slottable.h>
@@ -281,6 +282,12 @@ public:
 
     virtual bool is_child_allowed(Node const&) const { return true; }
 
+    [[nodiscard]] bool needs_layout_tree_update() const { return m_needs_layout_tree_update; }
+    void set_needs_layout_tree_update(bool);
+
+    [[nodiscard]] bool child_needs_layout_tree_update() const { return m_child_needs_layout_tree_update; }
+    void set_child_needs_layout_tree_update(bool b) { m_child_needs_layout_tree_update = b; }
+
     bool needs_style_update() const { return m_needs_style_update; }
     void set_needs_style_update(bool);
 
@@ -290,7 +297,12 @@ public:
     bool child_needs_style_update() const { return m_child_needs_style_update; }
     void set_child_needs_style_update(bool b) { m_child_needs_style_update = b; }
 
+    enum class ForceSelfStyleInvalidation : bool {
+        Yes,
+        No
+    };
     void invalidate_style(StyleInvalidationReason);
+    void invalidate_style(StyleInvalidationReason, Vector<CSS::InvalidationSet::Property> const&, ForceSelfStyleInvalidation = ForceSelfStyleInvalidation::No);
 
     void set_document(Badge<Document>, Document&);
 
@@ -640,7 +652,7 @@ public:
     {
         for (auto* node = first_child(); node; node = node->next_sibling()) {
             if (is<U>(node)) {
-                if (callback(verify_cast<U>(*node)) == IterationDecision::Break)
+                if (callback(as<U>(*node)) == IterationDecision::Break)
                     return;
             }
         }
@@ -657,7 +669,7 @@ public:
     {
         for (auto* node = first_child(); node; node = node->next_sibling()) {
             if (is<U>(node)) {
-                if (TRY(callback(verify_cast<U>(*node))) == IterationDecision::Break)
+                if (TRY(callback(as<U>(*node))) == IterationDecision::Break)
                     return {};
             }
         }
@@ -675,7 +687,7 @@ public:
     {
         for (auto* sibling = next_sibling(); sibling; sibling = sibling->next_sibling()) {
             if (is<U>(*sibling))
-                return &verify_cast<U>(*sibling);
+                return &as<U>(*sibling);
         }
         return nullptr;
     }
@@ -691,7 +703,7 @@ public:
     {
         for (auto* sibling = previous_sibling(); sibling; sibling = sibling->previous_sibling()) {
             if (is<U>(*sibling))
-                return &verify_cast<U>(*sibling);
+                return &as<U>(*sibling);
         }
         return nullptr;
     }
@@ -713,7 +725,7 @@ public:
     {
         for (auto* child = first_child(); child; child = child->next_sibling()) {
             if (is<U>(*child))
-                return &verify_cast<U>(*child);
+                return &as<U>(*child);
         }
         return nullptr;
     }
@@ -723,7 +735,7 @@ public:
     {
         for (auto* child = last_child(); child; child = child->previous_sibling()) {
             if (is<U>(*child))
-                return &verify_cast<U>(*child);
+                return &as<U>(*child);
         }
         return nullptr;
     }
@@ -745,7 +757,7 @@ public:
     {
         for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
             if (is<U>(*ancestor))
-                return &verify_cast<U>(*ancestor);
+                return &as<U>(*ancestor);
         }
         return nullptr;
     }
@@ -789,6 +801,9 @@ protected:
     GC::Ptr<Layout::Node> m_layout_node;
     GC::Ptr<Painting::Paintable> m_paintable;
     NodeType m_type { NodeType::INVALID };
+    bool m_needs_layout_tree_update { false };
+    bool m_child_needs_layout_tree_update { false };
+
     bool m_needs_style_update { false };
     bool m_needs_inherited_style_update { false };
     bool m_child_needs_style_update { false };

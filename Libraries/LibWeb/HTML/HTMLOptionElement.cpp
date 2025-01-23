@@ -38,6 +38,16 @@ void HTMLOptionElement::initialize(JS::Realm& realm)
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLOptionElement);
 }
 
+// FIXME: This needs to be called any time a descendant's text is modified.
+void HTMLOptionElement::update_selection_label()
+{
+    if (selected()) {
+        if (auto* select_element = first_ancestor_of_type<HTMLSelectElement>()) {
+            select_element->update_inner_text_element({});
+        }
+    }
+}
+
 void HTMLOptionElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_)
 {
     Base::attribute_changed(name, old_value, value, namespace_);
@@ -54,6 +64,8 @@ void HTMLOptionElement::attribute_changed(FlyString const& name, Optional<String
             if (!m_dirty)
                 set_selected_internal(true);
         }
+    } else if (name == HTML::AttributeNames::label) {
+        update_selection_label();
     }
 }
 
@@ -95,7 +107,7 @@ static void concatenate_descendants_text_content(DOM::Node const* node, StringBu
     if (is<HTMLScriptElement>(node) || is<SVG::SVGScriptElement>(node))
         return;
     if (is<DOM::Text>(node))
-        builder.append(verify_cast<DOM::Text>(node)->data());
+        builder.append(as<DOM::Text>(node)->data());
     node->for_each_child([&](auto const& node) {
         concatenate_descendants_text_content(&node, builder);
         return IterationDecision::Continue;
@@ -117,13 +129,7 @@ String HTMLOptionElement::label() const
 void HTMLOptionElement::set_label(String const& label)
 {
     MUST(set_attribute(HTML::AttributeNames::label, label));
-
-    // NOTE: This option's select element may need to show different contents now.
-    if (selected()) {
-        if (auto select_element = first_ancestor_of_type<HTMLSelectElement>()) {
-            select_element->update_inner_text_element({});
-        }
-    }
+    // Note: this causes attribute_changed() to be called, which will update the <select>'s label
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-text
@@ -147,6 +153,7 @@ String HTMLOptionElement::text() const
 void HTMLOptionElement::set_text(String const& text)
 {
     string_replace_all(text);
+    // Note: this causes children_changed() to be called, which will update the <select>'s label
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#concept-option-index
@@ -195,7 +202,7 @@ GC::Ptr<HTMLFormElement> HTMLOptionElement::form() const
         parent = parent->parent_element();
 
     if (is<HTML::HTMLSelectElement>(parent)) {
-        auto const* select_element = verify_cast<HTMLSelectElement>(parent);
+        auto const* select_element = as<HTMLSelectElement>(parent);
         return const_cast<HTMLFormElement*>(select_element->form());
     }
 
@@ -238,6 +245,13 @@ void HTMLOptionElement::removed_from(Node* old_parent)
         else if (is<HTMLOptGroupElement>(*old_parent) && old_parent->parent_element() && is<HTMLSelectElement>(old_parent->parent_element()))
             static_cast<HTMLSelectElement&>(*old_parent->parent_element()).update_selectedness();
     }
+}
+
+void HTMLOptionElement::children_changed()
+{
+    Base::children_changed();
+
+    update_selection_label();
 }
 
 }

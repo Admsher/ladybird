@@ -317,7 +317,8 @@ void HTMLFormElement::reset_form()
 
     // 2. If reset is true, then invoke the reset algorithm of each resettable element whose form owner is form.
     if (reset) {
-        for (auto element : m_associated_elements) {
+        GC::RootVector<GC::Ref<HTMLElement>> associated_elements_copy(heap(), m_associated_elements);
+        for (auto element : associated_elements_copy) {
             VERIFY(is<FormAssociatedElement>(*element));
             auto& form_associated_element = dynamic_cast<FormAssociatedElement&>(*element);
             if (form_associated_element.is_resettable())
@@ -520,7 +521,7 @@ static bool is_form_control(DOM::Element const& element, HTMLFormElement const& 
 GC::Ref<HTMLFormControlsCollection> HTMLFormElement::elements() const
 {
     if (!m_elements) {
-        auto& root = verify_cast<ParentNode>(const_cast<HTMLFormElement*>(this)->root());
+        auto& root = as<ParentNode>(const_cast<HTMLFormElement*>(this)->root());
         m_elements = HTMLFormControlsCollection::create(root, DOM::HTMLCollection::Scope::Descendants, [this](Element const& element) {
             return is_form_control(element, *this);
         });
@@ -1016,7 +1017,7 @@ Vector<FlyString> HTMLFormElement::supported_property_names() const
 JS::Value HTMLFormElement::named_item_value(FlyString const& name) const
 {
     auto& realm = this->realm();
-    auto& root = verify_cast<ParentNode>(this->root());
+    auto& root = as<ParentNode>(this->root());
 
     // To determine the value of a named property name for a form element, the user agent must run the following steps:
 

@@ -2,15 +2,14 @@
  * Copyright (c) 2018-2022, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2022-2023, Sam Atkins <atkinssj@serenityos.org>
  * Copyright (c) 2022, MacDue <macdue@dueutil.tech>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Error.h>
 #include <AK/Optional.h>
 #include <AK/TemporaryChange.h>
 #include <LibWeb/CSS/StyleComputer.h>
-#include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 #include <LibWeb/DOM/Document.h>
@@ -18,7 +17,6 @@
 #include <LibWeb/DOM/ParentNode.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/HTML/HTMLButtonElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/HTMLLIElement.h>
 #include <LibWeb/HTML/HTMLOListElement.h>
@@ -95,6 +93,10 @@ static Layout::Node& insertion_parent_for_inline_node(Layout::NodeWithStyle& lay
 
 static Layout::Node& insertion_parent_for_block_node(Layout::NodeWithStyle& layout_parent, Layout::Node& layout_node)
 {
+    // Inline is fine for in-flow block children; we'll maintain the (non-)inline invariant after insertion.
+    if (layout_parent.is_inline() && layout_parent.display().is_flow_inside() && !layout_node.is_out_of_flow())
+        return layout_parent;
+
     if (!has_inline_or_in_flow_block_children(layout_parent)) {
         // Parent block has no children, insert this block into parent.
         return layout_parent;
@@ -121,26 +123,25 @@ static Layout::Node& insertion_parent_for_block_node(Layout::NodeWithStyle& layo
         return layout_parent;
     }
 
-    // Parent block has inline-level children (our siblings).
-    // First move these siblings into an anonymous wrapper block.
-    Vector<GC::Root<Layout::Node>> children;
-    {
-        GC::Ptr<Layout::Node> next;
-        for (GC::Ptr<Layout::Node> child = layout_parent.first_child(); child; child = next) {
-            next = child->next_sibling();
-            // NOTE: We let out-of-flow children stay in the parent, to preserve tree structure.
-            if (child->is_out_of_flow())
-                continue;
-            layout_parent.remove_child(*child);
-            children.append(*child);
-        }
+    // Parent block has inline-level children (our siblings); wrap these siblings into an anonymous wrapper block.
+    Vector<GC::Ref<Node>> children;
+    for (GC::Ptr<Node> child = layout_parent.first_child(); child; child = child->next_sibling()) {
+        // NOTE: We let out-of-flow children stay in the parent, to preserve tree structure.
+        if (child->is_out_of_flow())
+            continue;
+        children.append(*child);
     }
-    layout_parent.append_child(layout_parent.create_anonymous_wrapper());
+
+    auto wrapper = layout_parent.create_anonymous_wrapper();
+    wrapper->set_children_are_inline(true);
+    for (auto child : children) {
+        layout_parent.remove_child(child);
+        wrapper->append_child(child);
+    }
+
     layout_parent.set_children_are_inline(false);
-    for (auto& child : children) {
-        layout_parent.last_child()->append_child(*child);
-    }
-    layout_parent.last_child()->set_children_are_inline(true);
+    layout_parent.append_child(wrapper);
+
     // Then it's safe to insert this block into parent.
     return layout_parent;
 }
@@ -150,45 +151,35 @@ void TreeBuilder::insert_node_into_inline_or_block_ancestor(Layout::Node& node, 
     if (node.display().is_contents())
         return;
 
-    if (display.is_inline_outside()) {
-        // Inlines can be inserted into the nearest ancestor without "display: contents".
-        auto& nearest_ancestor_without_display_contents = [&]() -> Layout::NodeWithStyle& {
-            for (auto& ancestor : m_ancestor_stack.in_reverse()) {
-                if (!ancestor->display().is_contents())
-                    return ancestor;
-            }
-            VERIFY_NOT_REACHED();
-        }();
-        auto& insertion_point = insertion_parent_for_inline_node(nearest_ancestor_without_display_contents);
-        if (mode == AppendOrPrepend::Prepend)
-            insertion_point.prepend_child(node);
-        else
-            insertion_point.append_child(node);
-        insertion_point.set_children_are_inline(true);
-    } else {
-        // Non-inlines can't be inserted into an inline parent, so find the nearest non-inline ancestor.
-        auto& nearest_non_inline_ancestor = [&]() -> Layout::NodeWithStyle& {
-            for (auto& ancestor : m_ancestor_stack.in_reverse()) {
-                if (ancestor->display().is_contents())
-                    continue;
-                if (!ancestor->display().is_inline_outside())
-                    return ancestor;
-                if (!ancestor->display().is_flow_inside())
-                    return ancestor;
-                if (ancestor->dom_node() && is<SVG::SVGForeignObjectElement>(*ancestor->dom_node()))
-                    return ancestor;
-            }
-            VERIFY_NOT_REACHED();
-        }();
-        auto& insertion_point = insertion_parent_for_block_node(nearest_non_inline_ancestor, node);
-        if (mode == AppendOrPrepend::Prepend)
-            insertion_point.prepend_child(node);
-        else
-            insertion_point.append_child(node);
+    // Find the nearest ancestor that can host the node.
+    auto& nearest_insertion_ancestor = [&]() -> NodeWithStyle& {
+        for (auto& ancestor : m_ancestor_stack.in_reverse()) {
+            auto const& ancestor_display = ancestor->display();
 
+            // Out-of-flow nodes cannot be hosted in inline flow nodes.
+            if (node.is_out_of_flow() && ancestor_display.is_inline_outside() && ancestor_display.is_flow_inside())
+                continue;
+
+            if (!ancestor_display.is_contents())
+                return ancestor;
+        }
+        VERIFY_NOT_REACHED();
+    }();
+
+    auto& insertion_point = display.is_inline_outside() ? insertion_parent_for_inline_node(nearest_insertion_ancestor)
+                                                        : insertion_parent_for_block_node(nearest_insertion_ancestor, node);
+
+    if (mode == AppendOrPrepend::Prepend)
+        insertion_point.prepend_child(node);
+    else
+        insertion_point.append_child(node);
+
+    if (display.is_inline_outside()) {
+        // After inserting an inline-level box into a parent, mark the parent as having inline children.
+        insertion_point.set_children_are_inline(true);
+    } else if (node.is_in_flow()) {
         // After inserting an in-flow block-level box into a parent, mark the parent as having non-inline children.
-        if (!node.is_floating() && !node.is_absolutely_positioned())
-            insertion_point.set_children_are_inline(false);
+        insertion_point.set_children_are_inline(false);
     }
 }
 
@@ -261,6 +252,159 @@ void TreeBuilder::create_pseudo_element_if_needed(DOM::Element& element, CSS::Se
     pseudo_element_node->mutable_computed_values().set_content(pseudo_element_content);
 }
 
+// Block nodes inside inline nodes are allowed, but to maintain the invariant that either all layout children are
+// inline or non-inline, we need to rearrange the tree a bit. All inline ancestors up to the node we've inserted are
+// wrapped in an anonymous block, which is inserted into the nearest non-inline ancestor. We then recreate the inline
+// ancestors in another anonymous block inserted after the node so we can continue adding children.
+//
+// Effectively, we try to turn this:
+//
+//     InlineNode 1
+//       TextNode 1
+//       InlineNode N
+//         TextNode N
+//         BlockContainer (node)
+//
+// Into this:
+//
+//     BlockContainer (anonymous "before")
+//       InlineNode 1
+//         TextNode 1
+//         InlineNode N
+//           TextNode N
+//     BlockContainer (anonymous "middle") continuation
+//       BlockContainer (node)
+//     BlockContainer (anonymous "after")
+//       InlineNode 1 continuation
+//         InlineNode N
+//
+// To be able to reconstruct their relation after restructuring, layout nodes keep track of their continuation. The
+// top-most inline node of the "after" wrapper points to the "middle" wrapper, which points to the top-most inline node
+// of the "before" wrapper. All other inline nodes in the "after" wrapper point to their counterparts in the "before"
+// wrapper, to make it easier to create the right paintables since a DOM::Node only has a single Layout::Node.
+//
+// Appending then continues in the "after" tree. If a new block node is then inserted, we can reuse the "middle" wrapper
+// if no inline siblings exist for node or its ancestors, and leave the existing "after" wrapper alone. Otherwise, we
+// create new wrappers and extend the continuation chain.
+//
+// Inspired by: https://webkit.org/blog/115/webcore-rendering-ii-blocks-and-inlines/
+void TreeBuilder::restructure_block_node_in_inline_parent(NodeWithStyleAndBoxModelMetrics& node)
+{
+    // Mark parent as inline again
+    auto& parent = *node.parent();
+    VERIFY(!parent.children_are_inline());
+    parent.set_children_are_inline(true);
+
+    // Find nearest non-inline, content supporting ancestor that is not an anonymous block.
+    auto& nearest_block_ancestor = [&] -> NodeWithStyle& {
+        for (auto* ancestor = parent.parent(); ancestor; ancestor = ancestor->parent()) {
+            if (!ancestor->is_inline() && !ancestor->display().is_contents() && !ancestor->is_anonymous())
+                return *ancestor;
+        }
+        VERIFY_NOT_REACHED();
+    }();
+    nearest_block_ancestor.set_children_are_inline(false);
+
+    // Unwind the ancestor stack to find the topmost inline ancestor.
+    GC::Ptr<NodeWithStyleAndBoxModelMetrics> topmost_inline_ancestor;
+    for (auto* ancestor = &parent; ancestor; ancestor = ancestor->parent()) {
+        if (ancestor == &nearest_block_ancestor)
+            break;
+        if (ancestor == m_ancestor_stack.last())
+            m_ancestor_stack.take_last();
+        if (ancestor->is_inline())
+            topmost_inline_ancestor = static_cast<NodeWithStyleAndBoxModelMetrics*>(ancestor);
+    }
+    VERIFY(topmost_inline_ancestor);
+
+    // We need to host the topmost inline ancestor and its previous siblings in an anonymous "before" wrapper. If an
+    // inline wrapper does not already exist, we create a new one and add it to the nearest block ancestor.
+    GC::Ptr<Node> before_wrapper;
+    if (auto last_child = nearest_block_ancestor.last_child(); last_child->is_anonymous() && last_child->children_are_inline()) {
+        before_wrapper = last_child;
+    } else {
+        before_wrapper = nearest_block_ancestor.create_anonymous_wrapper();
+        before_wrapper->set_children_are_inline(true);
+        nearest_block_ancestor.append_child(*before_wrapper);
+    }
+    if (topmost_inline_ancestor->parent() != before_wrapper.ptr()) {
+        GC::Ptr<Node> inline_to_move = topmost_inline_ancestor;
+        while (inline_to_move) {
+            auto* next = inline_to_move->previous_sibling();
+            inline_to_move->remove();
+            before_wrapper->insert_before(*inline_to_move, before_wrapper->first_child());
+            inline_to_move = next;
+        }
+    }
+
+    // If we are part of an existing continuation and all inclusive ancestors have no previous siblings, we can reuse
+    // the existing middle wrapper. Otherwiser, we create a new middle wrapper to contain the block node and add it to
+    // the nearest block ancestor.
+    bool needs_new_continuation = true;
+    GC::Ptr<NodeWithStyleAndBoxModelMetrics> middle_wrapper;
+    if (topmost_inline_ancestor->continuation_of_node()) {
+        needs_new_continuation = false;
+        for (GC::Ptr<Node> ancestor = node; ancestor != topmost_inline_ancestor; ancestor = ancestor->parent()) {
+            if (ancestor->previous_sibling()) {
+                needs_new_continuation = true;
+                break;
+            }
+        }
+        if (!needs_new_continuation)
+            middle_wrapper = topmost_inline_ancestor->continuation_of_node();
+    }
+    if (!middle_wrapper) {
+        middle_wrapper = static_cast<NodeWithStyleAndBoxModelMetrics&>(*nearest_block_ancestor.create_anonymous_wrapper());
+        nearest_block_ancestor.append_child(*middle_wrapper);
+        middle_wrapper->set_continuation_of_node({}, topmost_inline_ancestor);
+    }
+
+    // Move the block node to the middle wrapper.
+    node.remove();
+    middle_wrapper->append_child(node);
+
+    // If we need a new continuation, recreate inline ancestors in another anonymous block so we can continue adding new
+    // nodes. We don't need to do this if we are within an existing continuation and there were no previous siblings in
+    // any inclusive ancestor of node in the after wrapper.
+    if (needs_new_continuation) {
+        auto after_wrapper = nearest_block_ancestor.create_anonymous_wrapper();
+        GC::Ptr<Node> current_parent = after_wrapper;
+        for (GC::Ptr<Node> inline_node = topmost_inline_ancestor;
+            inline_node && is<DOM::Element>(inline_node->dom_node()); inline_node = inline_node->last_child()) {
+            auto& element = static_cast<DOM::Element&>(*inline_node->dom_node());
+
+            auto style = element.computed_properties();
+            auto& new_inline_node = static_cast<NodeWithStyleAndBoxModelMetrics&>(*element.create_layout_node(*style));
+            if (inline_node == topmost_inline_ancestor) {
+                // The topmost inline ancestor points to the middle wrapper, which in turns points to the original node.
+                new_inline_node.set_continuation_of_node({}, middle_wrapper);
+                topmost_inline_ancestor = new_inline_node;
+            } else {
+                // We need all other inline nodes to point to their original node so we can walk the continuation chain
+                // in LayoutState and create the right paintables.
+                new_inline_node.set_continuation_of_node({}, static_cast<NodeWithStyleAndBoxModelMetrics&>(*inline_node));
+            }
+
+            current_parent->append_child(new_inline_node);
+            current_parent = new_inline_node;
+
+            // Stop recreating nodes when we've reached node's parent
+            if (inline_node == &parent)
+                break;
+        }
+
+        after_wrapper->set_children_are_inline(true);
+        nearest_block_ancestor.append_child(after_wrapper);
+    }
+
+    // Rewind the ancestor stack
+    for (GC::Ptr<Node> inline_node = topmost_inline_ancestor; inline_node; inline_node = inline_node->last_child()) {
+        if (!is<NodeWithStyle>(*inline_node))
+            break;
+        m_ancestor_stack.append(static_cast<NodeWithStyle&>(*inline_node));
+    }
+}
+
 static bool is_ignorable_whitespace(Layout::Node const& node)
 {
     if (node.is_text_node() && static_cast<TextNode const&>(node).text_for_rendering().bytes_as_string_view().is_whitespace())
@@ -306,8 +450,13 @@ i32 TreeBuilder::calculate_list_item_index(DOM::Node& dom_node)
     return 1;
 }
 
-void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& context)
+void TreeBuilder::update_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& context, MustCreateSubtree must_create_subtree)
 {
+    bool should_create_layout_node = must_create_subtree == MustCreateSubtree::Yes
+        || dom_node.needs_layout_tree_update()
+        || dom_node.document().needs_full_layout_tree_update()
+        || (dom_node.is_document() && !dom_node.layout_node());
+
     if (dom_node.is_element()) {
         auto& element = static_cast<DOM::Element&>(dom_node);
         if (element.in_top_layer() && !context.layout_top_layer)
@@ -321,6 +470,7 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
             dom_node.document().style_computer().pop_ancestor(static_cast<DOM::Element const&>(dom_node));
     };
 
+    GC::Ptr<Layout::Node> old_layout_node = dom_node.layout_node();
     GC::Ptr<Layout::Node> layout_node;
     Optional<TemporaryChange<bool>> has_svg_root_change;
 
@@ -329,6 +479,8 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
         // go through the DOM tree and remove any old layout & paint nodes since they are now all stale.
         if (!layout_node) {
             dom_node.for_each_in_inclusive_subtree([&](auto& node) {
+                node.set_needs_layout_tree_update(false);
+                node.set_child_needs_layout_tree_update(false);
                 node.detach_layout_node({});
                 node.clear_paintable();
                 if (is<DOM::Element>(node))
@@ -349,49 +501,69 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
     GC::Ptr<CSS::ComputedProperties> style;
     CSS::Display display;
 
-    if (is<DOM::Element>(dom_node)) {
-        auto& element = static_cast<DOM::Element&>(dom_node);
-        element.clear_pseudo_element_nodes({});
-        VERIFY(!element.needs_style_update());
-        style = element.computed_properties();
-        element.resolve_counters(*style);
-        display = style->display();
-        if (display.is_none())
-            return;
-        // TODO: Implement changing element contents with the `content` property.
-        if (context.layout_svg_mask_or_clip_path) {
-            if (is<SVG::SVGMaskElement>(dom_node))
-                layout_node = document.heap().allocate<Layout::SVGMaskBox>(document, static_cast<SVG::SVGMaskElement&>(dom_node), *style);
-            else if (is<SVG::SVGClipPathElement>(dom_node))
-                layout_node = document.heap().allocate<Layout::SVGClipBox>(document, static_cast<SVG::SVGClipPathElement&>(dom_node), *style);
-            else
-                VERIFY_NOT_REACHED();
-            // Only layout direct uses of SVG masks/clipPaths.
-            context.layout_svg_mask_or_clip_path = false;
-        } else {
-            layout_node = element.create_layout_node(*style);
+    if (!should_create_layout_node) {
+        if (is<DOM::Element>(dom_node)) {
+            auto& element = static_cast<DOM::Element&>(dom_node);
+            style = element.computed_properties();
+            display = style->display();
         }
-    } else if (is<DOM::Document>(dom_node)) {
-        style = style_computer.create_document_style();
-        display = style->display();
-        layout_node = document.heap().allocate<Layout::Viewport>(static_cast<DOM::Document&>(dom_node), *style);
-    } else if (is<DOM::Text>(dom_node)) {
-        layout_node = document.heap().allocate<Layout::TextNode>(document, static_cast<DOM::Text&>(dom_node));
-        display = CSS::Display(CSS::DisplayOutside::Inline, CSS::DisplayInside::Flow);
+        layout_node = dom_node.layout_node();
+    } else {
+        if (is<DOM::Element>(dom_node)) {
+            auto& element = static_cast<DOM::Element&>(dom_node);
+            element.clear_pseudo_element_nodes({});
+            VERIFY(!element.needs_style_update());
+            style = element.computed_properties();
+            element.resolve_counters(*style);
+            display = style->display();
+            if (display.is_none())
+                return;
+            // TODO: Implement changing element contents with the `content` property.
+            if (context.layout_svg_mask_or_clip_path) {
+                if (is<SVG::SVGMaskElement>(dom_node))
+                    layout_node = document.heap().allocate<Layout::SVGMaskBox>(document, static_cast<SVG::SVGMaskElement&>(dom_node), *style);
+                else if (is<SVG::SVGClipPathElement>(dom_node))
+                    layout_node = document.heap().allocate<Layout::SVGClipBox>(document, static_cast<SVG::SVGClipPathElement&>(dom_node), *style);
+                else
+                    VERIFY_NOT_REACHED();
+                // Only layout direct uses of SVG masks/clipPaths.
+                context.layout_svg_mask_or_clip_path = false;
+            } else {
+                layout_node = element.create_layout_node(*style);
+            }
+        } else if (is<DOM::Document>(dom_node)) {
+            style = style_computer.create_document_style();
+            display = style->display();
+            layout_node = document.heap().allocate<Layout::Viewport>(static_cast<DOM::Document&>(dom_node), *style);
+        } else if (is<DOM::Text>(dom_node)) {
+            layout_node = document.heap().allocate<Layout::TextNode>(document, static_cast<DOM::Text&>(dom_node));
+            display = CSS::Display(CSS::DisplayOutside::Inline, CSS::DisplayInside::Flow);
+        }
     }
 
     if (!layout_node)
         return;
 
-    if (!dom_node.parent_or_shadow_host()) {
+    if (dom_node.is_document()) {
         m_layout_root = layout_node;
-    } else if (layout_node->is_svg_box()) {
-        m_ancestor_stack.last()->append_child(*layout_node);
-    } else {
-        insert_node_into_inline_or_block_ancestor(*layout_node, display, AppendOrPrepend::Append);
+    } else if (should_create_layout_node) {
+        // Decide whether to replace an existing node (partial tree update) or insert a new one appropriately.
+        bool const may_replace_existing_layout_node = must_create_subtree == MustCreateSubtree::No
+            && old_layout_node
+            && old_layout_node->parent()
+            && old_layout_node != layout_node;
+        if (may_replace_existing_layout_node) {
+            old_layout_node->parent()->replace_child(*layout_node, *old_layout_node);
+        } else {
+            if (layout_node->is_svg_box()) {
+                m_ancestor_stack.last()->append_child(*layout_node);
+            } else {
+                insert_node_into_inline_or_block_ancestor(*layout_node, display, AppendOrPrepend::Append);
+            }
+        }
     }
 
-    auto shadow_root = is<DOM::Element>(dom_node) ? verify_cast<DOM::Element>(dom_node).shadow_root() : nullptr;
+    auto shadow_root = is<DOM::Element>(dom_node) ? as<DOM::Element>(dom_node).shadow_root() : nullptr;
 
     auto element_has_content_visibility_hidden = [&dom_node]() {
         if (is<DOM::Element>(dom_node)) {
@@ -401,35 +573,58 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
         return false;
     }();
 
+    if (should_create_layout_node)
+        update_layout_tree_before_children(dom_node, *layout_node, context, element_has_content_visibility_hidden);
+
+    if (should_create_layout_node || dom_node.child_needs_layout_tree_update()) {
+        if ((dom_node.has_children() || shadow_root) && layout_node->can_have_children() && !element_has_content_visibility_hidden) {
+            push_parent(as<NodeWithStyle>(*layout_node));
+            if (shadow_root) {
+                for (auto* node = shadow_root->first_child(); node; node = node->next_sibling()) {
+                    update_layout_tree(*node, context, should_create_layout_node ? MustCreateSubtree::Yes : MustCreateSubtree::No);
+                }
+                shadow_root->set_child_needs_layout_tree_update(false);
+                shadow_root->set_needs_layout_tree_update(false);
+            } else {
+                // This is the same as as<DOM::ParentNode>(dom_node).for_each_child
+                for (auto* node = as<DOM::ParentNode>(dom_node).first_child(); node; node = node->next_sibling())
+                    update_layout_tree(*node, context, should_create_layout_node ? MustCreateSubtree::Yes : MustCreateSubtree::No);
+            }
+
+            if (dom_node.is_document()) {
+                // Elements in the top layer do not lay out normally based on their position in the document; instead they
+                // generate boxes as if they were siblings of the root element.
+                TemporaryChange<bool> layout_mask(context.layout_top_layer, true);
+                for (auto const& top_layer_element : document.top_layer_elements())
+                    update_layout_tree(top_layer_element, context, should_create_layout_node ? MustCreateSubtree::Yes : MustCreateSubtree::No);
+            }
+            pop_parent();
+        }
+    }
+
+    if (should_create_layout_node)
+        update_layout_tree_after_children(dom_node, *layout_node, context, element_has_content_visibility_hidden);
+
+    dom_node.set_needs_layout_tree_update(false);
+    dom_node.set_child_needs_layout_tree_update(false);
+}
+
+void TreeBuilder::update_layout_tree_before_children(DOM::Node& dom_node, GC::Ref<Layout::Node> layout_node, TreeBuilder::Context&, bool element_has_content_visibility_hidden)
+{
     // Add node for the ::before pseudo-element.
     if (is<DOM::Element>(dom_node) && layout_node->can_have_children() && !element_has_content_visibility_hidden) {
         auto& element = static_cast<DOM::Element&>(dom_node);
-        push_parent(verify_cast<NodeWithStyle>(*layout_node));
+        push_parent(as<NodeWithStyle>(*layout_node));
         create_pseudo_element_if_needed(element, CSS::Selector::PseudoElement::Type::Before, AppendOrPrepend::Prepend);
         pop_parent();
     }
+}
 
-    if ((dom_node.has_children() || shadow_root) && layout_node->can_have_children() && !element_has_content_visibility_hidden) {
-        push_parent(verify_cast<NodeWithStyle>(*layout_node));
-        if (shadow_root) {
-            for (auto* node = shadow_root->first_child(); node; node = node->next_sibling()) {
-                create_layout_tree(*node, context);
-            }
-        } else {
-            // This is the same as verify_cast<DOM::ParentNode>(dom_node).for_each_child
-            for (auto* node = verify_cast<DOM::ParentNode>(dom_node).first_child(); node; node = node->next_sibling())
-                create_layout_tree(*node, context);
-        }
-
-        if (dom_node.is_document()) {
-            // Elements in the top layer do not lay out normally based on their position in the document; instead they
-            // generate boxes as if they were siblings of the root element.
-            TemporaryChange<bool> layout_mask(context.layout_top_layer, true);
-            for (auto const& top_layer_element : document.top_layer_elements())
-                create_layout_tree(top_layer_element, context);
-        }
-        pop_parent();
-    }
+void TreeBuilder::update_layout_tree_after_children(DOM::Node& dom_node, GC::Ref<Layout::Node> layout_node, TreeBuilder::Context& context, bool element_has_content_visibility_hidden)
+{
+    auto& document = dom_node.document();
+    auto& style_computer = document.style_computer();
+    auto display = layout_node->display();
 
     if (is<ListItemBox>(*layout_node)) {
         auto& element = static_cast<DOM::Element&>(dom_node);
@@ -447,10 +642,10 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
             return;
 
         auto slottables = slot_element.assigned_nodes_internal();
-        push_parent(verify_cast<NodeWithStyle>(*layout_node));
+        push_parent(as<NodeWithStyle>(*layout_node));
 
         for (auto const& slottable : slottables)
-            slottable.visit([&](auto& node) { create_layout_tree(node, context); });
+            slottable.visit([&](auto& node) { update_layout_tree(node, context, MustCreateSubtree::Yes); });
 
         pop_parent();
     }
@@ -463,8 +658,8 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
         // duplication is necessary.
         auto layout_mask_or_clip_path = [&](GC::Ptr<SVG::SVGElement const> mask_or_clip_path) {
             TemporaryChange<bool> layout_mask(context.layout_svg_mask_or_clip_path, true);
-            push_parent(verify_cast<NodeWithStyle>(*layout_node));
-            create_layout_tree(const_cast<SVG::SVGElement&>(*mask_or_clip_path), context);
+            push_parent(as<NodeWithStyle>(*layout_node));
+            update_layout_tree(const_cast<SVG::SVGElement&>(*mask_or_clip_path), context, MustCreateSubtree::Yes);
             pop_parent();
         };
         if (auto mask = graphics_element.mask())
@@ -489,7 +684,7 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
     // https://html.spec.whatwg.org/multipage/rendering.html#button-layout
     // If the computed value of 'inline-size' is 'auto', then the used value is the fit-content inline size.
     if (is_button_layout && dom_node.layout_node()->computed_values().width().is_auto()) {
-        auto& computed_values = verify_cast<NodeWithStyle>(*dom_node.layout_node()).mutable_computed_values();
+        auto& computed_values = as<NodeWithStyle>(*dom_node.layout_node()).mutable_computed_values();
         computed_values.set_width(CSS::Size::make_fit_content());
     }
 
@@ -536,10 +731,18 @@ void TreeBuilder::create_layout_tree(DOM::Node& dom_node, TreeBuilder::Context& 
     // Add nodes for the ::after pseudo-element.
     if (is<DOM::Element>(dom_node) && layout_node->can_have_children() && !element_has_content_visibility_hidden) {
         auto& element = static_cast<DOM::Element&>(dom_node);
-        push_parent(verify_cast<NodeWithStyle>(*layout_node));
+        push_parent(as<NodeWithStyle>(*layout_node));
         create_pseudo_element_if_needed(element, CSS::Selector::PseudoElement::Type::After, AppendOrPrepend::Append);
         pop_parent();
     }
+
+    // If we completely finished inserting a block level element into an inline parent, we need to fix up the tree so
+    // that we can maintain the invariant that all children are either inline or non-inline. We can't do this earlier,
+    // because the restructuring adds new children after this node that become part of the ancestor stack.
+    auto* layout_parent = layout_node->parent();
+    if (layout_parent && layout_parent->display().is_inline_outside() && !display.is_contents()
+        && !display.is_inline_outside() && layout_parent->display().is_flow_inside() && !layout_node->is_out_of_flow())
+        restructure_block_node_in_inline_parent(static_cast<NodeWithStyleAndBoxModelMetrics&>(*layout_node));
 }
 
 GC::Ptr<Layout::Node> TreeBuilder::build(DOM::Node& dom_node)
@@ -550,12 +753,12 @@ GC::Ptr<Layout::Node> TreeBuilder::build(DOM::Node& dom_node)
 
     Context context;
     m_quote_nesting_level = 0;
-    create_layout_tree(dom_node, context);
+    update_layout_tree(dom_node, context, MustCreateSubtree::No);
 
     if (auto* root = dom_node.document().layout_node())
         fixup_tables(*root);
 
-    return move(m_layout_root);
+    return m_layout_root;
 }
 
 template<CSS::DisplayInternal internal, typename Callback>
@@ -784,6 +987,11 @@ Vector<GC::Root<Box>> TreeBuilder::generate_missing_parents(NodeWithStyle& root)
 
         // An anonymous table-wrapper box must be generated around each table-root.
         if (parent.display().is_table_inside()) {
+            if (parent.has_been_wrapped_in_table_wrapper()) {
+                VERIFY(parent.parent());
+                VERIFY(parent.parent()->is_table_wrapper());
+                return TraversalDecision::Continue;
+            }
             table_roots_to_wrap.append(parent);
         }
 
@@ -797,6 +1005,12 @@ Vector<GC::Root<Box>> TreeBuilder::generate_missing_parents(NodeWithStyle& root)
         auto wrapper_computed_values = table_box->computed_values().clone_inherited_values();
         table_box->transfer_table_box_computed_values_to_wrapper_computed_values(*wrapper_computed_values);
 
+        if (parent.is_table_wrapper()) {
+            auto& existing_wrapper = static_cast<TableWrapper&>(parent);
+            existing_wrapper.set_computed_values(move(wrapper_computed_values));
+            continue;
+        }
+
         auto wrapper = parent.heap().allocate<TableWrapper>(parent.document(), nullptr, move(wrapper_computed_values));
 
         parent.remove_child(*table_box);
@@ -806,6 +1020,8 @@ Vector<GC::Root<Box>> TreeBuilder::generate_missing_parents(NodeWithStyle& root)
             parent.insert_before(*wrapper, *nearest_sibling);
         else
             parent.append_child(*wrapper);
+
+        table_box->set_has_been_wrapped_in_table_wrapper(true);
     }
 
     return table_roots_to_wrap;

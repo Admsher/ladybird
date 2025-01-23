@@ -611,13 +611,13 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> AssignmentExpression::g
                         else
                             generator.emit<Bytecode::Op::PutByValueWithThis>(*base, *computed_property, *this_value, rval);
                     } else if (expression.property().is_identifier()) {
-                        auto identifier_table_ref = generator.intern_identifier(verify_cast<Identifier>(expression.property()).string());
+                        auto identifier_table_ref = generator.intern_identifier(as<Identifier>(expression.property()).string());
                         if (!lhs_is_super_expression)
                             generator.emit<Bytecode::Op::PutById>(*base, identifier_table_ref, rval, Bytecode::Op::PropertyKind::KeyValue, generator.next_property_lookup_cache(), move(base_identifier));
                         else
                             generator.emit<Bytecode::Op::PutByIdWithThis>(*base, *this_value, identifier_table_ref, rval, Bytecode::Op::PropertyKind::KeyValue, generator.next_property_lookup_cache());
                     } else if (expression.property().is_private_identifier()) {
-                        auto identifier_table_ref = generator.intern_identifier(verify_cast<PrivateIdentifier>(expression.property()).string());
+                        auto identifier_table_ref = generator.intern_identifier(as<PrivateIdentifier>(expression.property()).string());
                         generator.emit<Bytecode::Op::PutPrivateById>(*base, identifier_table_ref, rval);
                     } else {
                         return Bytecode::CodeGenerationError {
@@ -985,7 +985,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ForStatement::generate_
 
     if (m_init) {
         if (m_init->is_variable_declaration()) {
-            auto& variable_declaration = verify_cast<VariableDeclaration>(*m_init);
+            auto& variable_declaration = as<VariableDeclaration>(*m_init);
 
             auto has_non_local_variables = false;
             MUST(variable_declaration.for_each_bound_identifier([&](auto const& identifier) {
@@ -1670,7 +1670,7 @@ static Bytecode::CodeGenerationErrorOr<BaseAndValue> get_base_and_value_from_mem
             generator.emit<Bytecode::Op::GetByValueWithThis>(value, super_base, *computed_property, this_value);
         } else {
             // 3. Let propertyKey be StringValue of IdentifierName.
-            auto identifier_table_ref = generator.intern_identifier(verify_cast<Identifier>(member_expression.property()).string());
+            auto identifier_table_ref = generator.intern_identifier(as<Identifier>(member_expression.property()).string());
             generator.emit_get_by_id_with_this(value, super_base, identifier_table_ref, this_value);
         }
 
@@ -1686,10 +1686,10 @@ static Bytecode::CodeGenerationErrorOr<BaseAndValue> get_base_and_value_from_mem
         generator.emit<Bytecode::Op::GetPrivateById>(
             value,
             base,
-            generator.intern_identifier(verify_cast<PrivateIdentifier>(member_expression.property()).string()));
+            generator.intern_identifier(as<PrivateIdentifier>(member_expression.property()).string()));
     } else {
         auto base_identifier = generator.intern_identifier_for_expression(member_expression.object());
-        generator.emit_get_by_id(value, base, generator.intern_identifier(verify_cast<Identifier>(member_expression.property()).string()), move(base_identifier));
+        generator.emit_get_by_id(value, base, generator.intern_identifier(as<Identifier>(member_expression.property()).string()), move(base_identifier));
     }
 
     return BaseAndValue { base, value };
@@ -2469,10 +2469,24 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TemplateLiteral::genera
     return dst;
 }
 
+struct TagAndThisValue {
+    ScopedOperand tag;
+    ScopedOperand this_value;
+};
+
 Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TaggedTemplateLiteral::generate_bytecode(Bytecode::Generator& generator, Optional<ScopedOperand> preferred_dst) const
 {
     Bytecode::Generator::SourceLocationScope scope(generator, *this);
-    auto tag = TRY(m_tag->generate_bytecode(generator)).value();
+    auto [tag, this_value] = TRY([&]() -> CodeGenerationErrorOr<TagAndThisValue> {
+        if (is<MemberExpression>(*m_tag)) {
+            auto& member_expression = static_cast<MemberExpression const&>(*m_tag);
+            auto base_and_value = TRY(get_base_and_value_from_member_expression(generator, member_expression));
+            return TagAndThisValue { .tag = base_and_value.value, .this_value = base_and_value.base };
+        }
+
+        auto tag = TRY(m_tag->generate_bytecode(generator)).value();
+        return TagAndThisValue { .tag = tag, .this_value = generator.add_constant(js_undefined()) };
+    }());
 
     // FIXME: Follow
     //        13.2.8.3 GetTemplateObject ( templateLiteral ), https://tc39.es/ecma262/#sec-gettemplateobject
@@ -2539,7 +2553,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TaggedTemplateLiteral::
         generator.emit<Bytecode::Op::NewArray>(arguments);
 
     auto dst = choose_dst(generator, preferred_dst);
-    generator.emit<Bytecode::Op::CallWithArgumentArray>(Bytecode::Op::CallType::Call, dst, tag, generator.add_constant(js_undefined()), arguments);
+    generator.emit<Bytecode::Op::CallWithArgumentArray>(Bytecode::Op::CallType::Call, dst, tag, this_value, arguments);
     return dst;
 }
 

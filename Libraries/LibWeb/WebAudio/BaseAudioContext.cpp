@@ -160,6 +160,13 @@ WebIDL::ExceptionOr<GC::Ref<PeriodicWave>> BaseAudioContext::create_periodic_wav
     return PeriodicWave::construct_impl(realm(), *this, options);
 }
 
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createstereopanner
+WebIDL::ExceptionOr<GC::Ref<StereoPannerNode>> BaseAudioContext::create_stereo_panner()
+{
+    // Factory method for a StereoPannerNode.
+    return StereoPannerNode::create(realm(), *this);
+}
+
 WebIDL::ExceptionOr<void> BaseAudioContext::verify_audio_options_inside_nominal_range(JS::Realm& realm, float sample_rate)
 {
     if (sample_rate < MIN_SAMPLE_RATE || sample_rate > MAX_SAMPLE_RATE)
@@ -202,7 +209,7 @@ GC::Ref<WebIDL::Promise> BaseAudioContext::decode_audio_data(GC::Root<WebIDL::Bu
 
     // 1. If this's relevant global object's associated Document is not fully active then return a
     //    promise rejected with "InvalidStateError" DOMException.
-    auto const& associated_document = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
+    auto const& associated_document = as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document();
     if (!associated_document.is_fully_active()) {
         auto error = WebIDL::InvalidStateError::create(realm, "The document is not fully active."_string);
         return WebIDL::create_rejected_promise_from_exception(realm, error);

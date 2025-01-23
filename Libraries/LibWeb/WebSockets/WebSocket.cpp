@@ -10,6 +10,7 @@
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibRequests/RequestClient.h>
 #include <LibURL/Origin.h>
+#include <LibWeb/Bindings/PrincipalHostDefined.h>
 #include <LibWeb/Bindings/WebSocketPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
@@ -48,22 +49,22 @@ WebIDL::ExceptionOr<GC::Ref<WebSocket>> WebSocket::construct_impl(JS::Realm& rea
     auto url_record = DOMURL::parse(url, base_url);
 
     // 3. If urlRecord is failure, then throw a "SyntaxError" DOMException.
-    if (!url_record.is_valid())
+    if (!url_record.has_value())
         return WebIDL::SyntaxError::create(realm, "Invalid URL"_string);
 
     // 4. If urlRecord’s scheme is "http", then set urlRecord’s scheme to "ws".
-    if (url_record.scheme() == "http"sv)
-        url_record.set_scheme("ws"_string);
+    if (url_record->scheme() == "http"sv)
+        url_record->set_scheme("ws"_string);
     // 5. Otherwise, if urlRecord’s scheme is "https", set urlRecord’s scheme to "wss".
-    else if (url_record.scheme() == "https"sv)
-        url_record.set_scheme("wss"_string);
+    else if (url_record->scheme() == "https"sv)
+        url_record->set_scheme("wss"_string);
 
     // 6. If urlRecord’s scheme is not "ws" or "wss", then throw a "SyntaxError" DOMException.
-    if (!url_record.scheme().is_one_of("ws"sv, "wss"sv))
+    if (!url_record->scheme().is_one_of("ws"sv, "wss"sv))
         return WebIDL::SyntaxError::create(realm, "Invalid protocol"_string);
 
     // 7. If urlRecord’s fragment is non-null, then throw a "SyntaxError" DOMException.
-    if (url_record.fragment().has_value())
+    if (url_record->fragment().has_value())
         return WebIDL::SyntaxError::create(realm, "Presence of URL fragment is invalid"_string);
 
     Vector<String> protocols_sequence;
@@ -93,14 +94,14 @@ WebIDL::ExceptionOr<GC::Ref<WebSocket>> WebSocket::construct_impl(JS::Realm& rea
     }
 
     // 10. Set this's url to urlRecord.
-    web_socket->set_url(url_record);
+    web_socket->set_url(*url_record);
 
     // 11. Let client be this’s relevant settings object.
     auto& client = relevant_settings_object;
 
     // FIXME: 12. Run this step in parallel:
     //     1. Establish a WebSocket connection given urlRecord, protocols, and client. [FETCH]
-    TRY_OR_THROW_OOM(vm, web_socket->establish_web_socket_connection(url_record, protocols_sequence, client));
+    TRY_OR_THROW_OOM(vm, web_socket->establish_web_socket_connection(*url_record, protocols_sequence, client));
 
     return web_socket;
 }
@@ -130,7 +131,23 @@ ErrorOr<void> WebSocket::establish_web_socket_connection(URL::URL& url_record, V
     for (auto const& protocol : protocols)
         TRY(protcol_byte_strings.try_append(protocol.to_byte_string()));
 
-    m_websocket = ResourceLoader::the().request_client().websocket_connect(url_record, origin_string, protcol_byte_strings);
+    HTTP::HeaderMap additional_headers;
+
+    auto cookies = ([&] {
+        // FIXME: Getting to the page client reliably is way too complicated, and going via the document won't work in workers.
+        auto document = client.responsible_document();
+        if (!document)
+            return String {};
+
+        // NOTE: The WebSocket handshake is sent as an HTTP request, so the source should be Http.
+        return document->page().client().page_did_request_cookie(url_record, Cookie::Source::Http);
+    })();
+
+    if (!cookies.is_empty()) {
+        additional_headers.set("Cookie", cookies.to_byte_string());
+    }
+
+    m_websocket = ResourceLoader::the().request_client().websocket_connect(url_record, origin_string, protcol_byte_strings, {}, additional_headers);
 
     m_websocket->on_open = [weak_this = make_weak_ptr<WebSocket>()] {
         if (!weak_this)

@@ -2,7 +2,7 @@
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  * Copyright (c) 2021, the SerenityOS developers.
  * Copyright (c) 2023, networkException <networkexception@serenityos.org>
- * Copyright (c) 2024, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2024-2025, Shannon Booth <shannon@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -132,22 +132,31 @@ void DOMURL::revoke_object_url(JS::VM&, StringView url)
     // 1. Let url record be the result of parsing url.
     auto url_record = parse(url);
 
+    // Spec Bug: https://github.com/w3c/FileAPI/issues/207, missing check for URL failure parsing.
+    if (!url_record.has_value())
+        return;
+
     // 2. If url record’s scheme is not "blob", return.
-    if (url_record.scheme() != "blob"sv)
+    if (url_record->scheme() != "blob"sv)
         return;
 
-    // 3. Let origin be the origin of url record.
-    auto origin = url_record.origin();
+    // 3. Let entry be urlRecord’s blob URL entry.
+    auto const& entry = url_record->blob_url_entry();
 
-    // 4. Let settings be the current settings object.
-    auto& settings = HTML::current_principal_settings_object();
-
-    // 5. If origin is not same origin with settings’s origin, return.
-    if (!origin.is_same_origin(settings.origin()))
+    // 4. If entry is null, return.
+    if (!entry.has_value())
         return;
 
-    // 6. Remove an entry from the Blob URL Store for url.
-    FileAPI::remove_entry_from_blob_url_store(url);
+    // 5. Let isAuthorized be the result of checking for same-partition blob URL usage with entry and the current settings object.
+    bool is_authorized = FileAPI::check_for_same_partition_blob_url_usage(entry.value(), HTML::current_principal_settings_object());
+
+    // 6. If isAuthorized is false, then return.
+    if (!is_authorized)
+        return;
+
+    // 7. Remove an entry from the Blob URL Store for url.
+    // FIXME: Spec bug: https://github.com/w3c/FileAPI/issues/207, urlRecord should instead be passed through.
+    FileAPI::remove_entry_from_blob_url_store(*url_record);
 }
 
 // https://url.spec.whatwg.org/#dom-url-canparse
@@ -211,23 +220,18 @@ String DOMURL::origin() const
 }
 
 // https://url.spec.whatwg.org/#dom-url-protocol
-WebIDL::ExceptionOr<String> DOMURL::protocol() const
+String DOMURL::protocol() const
 {
-    auto& vm = realm().vm();
-
     // The protocol getter steps are to return this’s URL’s scheme, followed by U+003A (:).
-    return TRY_OR_THROW_OOM(vm, String::formatted("{}:", m_url.scheme()));
+    return MUST(String::formatted("{}:", m_url.scheme()));
 }
 
 // https://url.spec.whatwg.org/#ref-for-dom-url-protocol%E2%91%A0
-WebIDL::ExceptionOr<void> DOMURL::set_protocol(String const& protocol)
+void DOMURL::set_protocol(String const& protocol)
 {
-    auto& vm = realm().vm();
-
     // The protocol setter steps are to basic URL parse the given value, followed by U+003A (:), with this’s URL as
     // url and scheme start state as state override.
-    (void)URL::Parser::basic_parse(TRY_OR_THROW_OOM(vm, String::formatted("{}:", protocol)), {}, &m_url, URL::Parser::State::SchemeStart);
-    return {};
+    (void)URL::Parser::basic_parse(MUST(String::formatted("{}:", protocol)), {}, &m_url, URL::Parser::State::SchemeStart);
 }
 
 // https://url.spec.whatwg.org/#dom-url-username
@@ -267,12 +271,10 @@ void DOMURL::set_password(String const& password)
 }
 
 // https://url.spec.whatwg.org/#dom-url-host
-WebIDL::ExceptionOr<String> DOMURL::host() const
+String DOMURL::host() const
 {
-    auto& vm = realm().vm();
-
     // 1. Let url be this’s URL.
-    auto& url = m_url;
+    auto const& url = m_url;
 
     // 2. If url’s host is null, then return the empty string.
     if (!url.host().has_value())
@@ -283,7 +285,7 @@ WebIDL::ExceptionOr<String> DOMURL::host() const
         return url.serialized_host();
 
     // 4. Return url’s host, serialized, followed by U+003A (:) and url’s port, serialized.
-    return TRY_OR_THROW_OOM(vm, String::formatted("{}:{}", url.serialized_host(), *url.port()));
+    return MUST(String::formatted("{}:{}", url.serialized_host(), *url.port()));
 }
 
 // https://url.spec.whatwg.org/#dom-url-hostref-for-dom-url-host%E2%91%A0
@@ -298,7 +300,7 @@ void DOMURL::set_host(String const& host)
 }
 
 // https://url.spec.whatwg.org/#dom-url-hostname
-WebIDL::ExceptionOr<String> DOMURL::hostname() const
+String DOMURL::hostname() const
 {
     // 1. If this’s URL’s host is null, then return the empty string.
     if (!m_url.host().has_value())
@@ -320,16 +322,14 @@ void DOMURL::set_hostname(String const& hostname)
 }
 
 // https://url.spec.whatwg.org/#dom-url-port
-WebIDL::ExceptionOr<String> DOMURL::port() const
+String DOMURL::port() const
 {
-    auto& vm = realm().vm();
-
     // 1. If this’s URL’s port is null, then return the empty string.
     if (!m_url.port().has_value())
         return String {};
 
     // 2. Return this’s URL’s port, serialized.
-    return TRY_OR_THROW_OOM(vm, String::formatted("{}", *m_url.port()));
+    return MUST(String::formatted("{}", *m_url.port()));
 }
 
 // https://url.spec.whatwg.org/#ref-for-dom-url-port%E2%91%A0
@@ -372,16 +372,14 @@ void DOMURL::set_pathname(String const& pathname)
 }
 
 // https://url.spec.whatwg.org/#dom-url-search
-WebIDL::ExceptionOr<String> DOMURL::search() const
+String DOMURL::search() const
 {
-    auto& vm = realm().vm();
-
     // 1. If this’s URL’s query is either null or the empty string, then return the empty string.
     if (!m_url.query().has_value() || m_url.query()->is_empty())
         return String {};
 
     // 2. Return U+003F (?), followed by this’s URL’s query.
-    return TRY_OR_THROW_OOM(vm, String::formatted("?{}", *m_url.query()));
+    return MUST(String::formatted("?{}", *m_url.query()));
 }
 
 // https://url.spec.whatwg.org/#ref-for-dom-url-search%E2%91%A0
@@ -427,16 +425,14 @@ GC::Ref<URLSearchParams const> DOMURL::search_params() const
 }
 
 // https://url.spec.whatwg.org/#dom-url-hash
-WebIDL::ExceptionOr<String> DOMURL::hash() const
+String DOMURL::hash() const
 {
-    auto& vm = realm().vm();
-
     // 1. If this’s URL’s fragment is either null or the empty string, then return the empty string.
     if (!m_url.fragment().has_value() || m_url.fragment()->is_empty())
         return String {};
 
     // 2. Return U+0023 (#), followed by this’s URL’s fragment.
-    return TRY_OR_THROW_OOM(vm, String::formatted("#{}", m_url.fragment()));
+    return MUST(String::formatted("#{}", m_url.fragment()));
 }
 
 // https://url.spec.whatwg.org/#ref-for-dom-url-hash%E2%91%A0
@@ -465,14 +461,6 @@ void DOMURL::set_hash(String const& hash)
     (void)URL::Parser::basic_parse(input, {}, &m_url, URL::Parser::State::Fragment);
 }
 
-// https://url.spec.whatwg.org/#concept-domain
-// FIXME: Move into URL::Host
-bool host_is_domain(URL::Host const& host)
-{
-    // A domain is a non-empty ASCII string that identifies a realm within a network.
-    return host.has<String>() && host.get<String>() != String {};
-}
-
 // https://url.spec.whatwg.org/#potentially-strip-trailing-spaces-from-an-opaque-path
 void strip_trailing_spaces_from_an_opaque_path(DOMURL& url)
 {
@@ -497,7 +485,7 @@ void strip_trailing_spaces_from_an_opaque_path(DOMURL& url)
 }
 
 // https://url.spec.whatwg.org/#concept-url-parser
-URL::URL parse(StringView input, Optional<URL::URL const&> base_url, Optional<StringView> encoding)
+Optional<URL::URL> parse(StringView input, Optional<URL::URL const&> base_url, Optional<StringView> encoding)
 {
     // FIXME: We should probably have an extended version of URL::URL for LibWeb instead of standalone functions like this.
 
@@ -506,7 +494,7 @@ URL::URL parse(StringView input, Optional<URL::URL const&> base_url, Optional<St
 
     // 2. If url is failure, return failure.
     if (!url.has_value())
-        return {}; // FIXME: Migrate this API to return an OptionalNone on failure.
+        return {};
 
     // 3. If url’s scheme is not "blob", return url.
     if (url->scheme() != "blob")
@@ -516,9 +504,11 @@ URL::URL parse(StringView input, Optional<URL::URL const&> base_url, Optional<St
     auto blob_url_entry = FileAPI::resolve_a_blob_url(*url);
     if (blob_url_entry.has_value()) {
         url->set_blob_url_entry(URL::BlobURLEntry {
-            .type = blob_url_entry->object->type(),
-            .byte_buffer = MUST(ByteBuffer::copy(blob_url_entry->object->raw_bytes())),
-            .environment_origin = blob_url_entry->environment->origin(),
+            .object = URL::BlobURLEntry::Object {
+                .type = blob_url_entry->object->type(),
+                .data = MUST(ByteBuffer::copy(blob_url_entry->object->raw_bytes())),
+            },
+            .environment { .origin = blob_url_entry->environment->origin() },
         });
     }
 

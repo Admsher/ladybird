@@ -2,6 +2,7 @@
  * Copyright (c) 2022-2023, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2022-2023, Sam Atkins <atkinssj@serenityos.org>
  * Copyright (c) 2024, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -17,7 +18,6 @@
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/InlineNode.h>
-#include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Painting/BackgroundPainting.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Painting/SVGPaintable.h>
@@ -209,8 +209,36 @@ CSSPixelRect PaintableBox::compute_absolute_paint_rect() const
             continue;
         auto inflate = shadow.spread_distance + shadow.blur_radius;
         auto shadow_rect = rect.inflated(inflate, inflate, inflate, inflate).translated(shadow.offset_x, shadow.offset_y);
-        rect = rect.united(shadow_rect);
+        rect.unite(shadow_rect);
     }
+    return rect;
+}
+
+CSSPixelRect PaintableBox::absolute_padding_box_rect() const
+{
+    auto absolute_rect = this->absolute_rect();
+    CSSPixelRect rect;
+    rect.set_x(absolute_rect.x() - box_model().padding.left);
+    rect.set_width(content_width() + box_model().padding.left + box_model().padding.right);
+    rect.set_y(absolute_rect.y() - box_model().padding.top);
+    rect.set_height(content_height() + box_model().padding.top + box_model().padding.bottom);
+    return rect;
+}
+
+CSSPixelRect PaintableBox::absolute_border_box_rect() const
+{
+    auto padded_rect = this->absolute_padding_box_rect();
+    CSSPixelRect rect;
+    auto use_collapsing_borders_model = override_borders_data().has_value();
+    // Implement the collapsing border model https://www.w3.org/TR/CSS22/tables.html#collapsing-borders.
+    auto border_top = use_collapsing_borders_model ? round(box_model().border.top / 2) : box_model().border.top;
+    auto border_bottom = use_collapsing_borders_model ? round(box_model().border.bottom / 2) : box_model().border.bottom;
+    auto border_left = use_collapsing_borders_model ? round(box_model().border.left / 2) : box_model().border.left;
+    auto border_right = use_collapsing_borders_model ? round(box_model().border.right / 2) : box_model().border.right;
+    rect.set_x(padded_rect.x() - border_left);
+    rect.set_width(padded_rect.width() + border_left + border_right);
+    rect.set_y(padded_rect.y() - border_top);
+    rect.set_height(padded_rect.height() + border_top + border_bottom);
     return rect;
 }
 
@@ -219,6 +247,51 @@ CSSPixelRect PaintableBox::absolute_paint_rect() const
     if (!m_absolute_paint_rect.has_value())
         m_absolute_paint_rect = compute_absolute_paint_rect();
     return *m_absolute_paint_rect;
+}
+
+template<typename Callable>
+static CSSPixelRect united_rect_for_continuation_chain(PaintableBox const& start, Callable get_rect)
+{
+    // Combine the absolute rects of all paintable boxes of all nodes in the continuation chain. Without this, we
+    // calculate the wrong rect for inline nodes that were split because of block elements.
+    Optional<CSSPixelRect> result;
+
+    // FIXME: instead of walking the continuation chain in the layout tree, also keep track of this chain in the
+    //        painting tree so we can skip visiting the layout nodes altogether.
+    for (auto const* node = &start.layout_node_with_style_and_box_metrics(); node; node = node->continuation_of_node()) {
+        for (auto const& paintable : node->paintables()) {
+            if (!is<PaintableBox>(paintable))
+                continue;
+            auto const& paintable_box = static_cast<PaintableBox const&>(paintable);
+            auto paintable_border_box_rect = get_rect(paintable_box);
+            if (!result.has_value())
+                result = paintable_border_box_rect;
+            else if (!paintable_border_box_rect.is_empty())
+                result->unite(paintable_border_box_rect);
+        }
+    }
+    return result.value_or({});
+}
+
+CSSPixelRect PaintableBox::absolute_united_border_box_rect() const
+{
+    return united_rect_for_continuation_chain(*this, [](auto const& paintable_box) {
+        return paintable_box.absolute_border_box_rect();
+    });
+}
+
+CSSPixelRect PaintableBox::absolute_united_content_rect() const
+{
+    return united_rect_for_continuation_chain(*this, [](auto const& paintable_box) {
+        return paintable_box.absolute_rect();
+    });
+}
+
+CSSPixelRect PaintableBox::absolute_united_padding_box_rect() const
+{
+    return united_rect_for_continuation_chain(*this, [](auto const& paintable_box) {
+        return paintable_box.absolute_padding_box_rect();
+    });
 }
 
 Optional<CSSPixelRect> PaintableBox::get_clip_rect() const
@@ -396,17 +469,18 @@ void PaintableBox::paint(PaintContext& context, PaintPhase phase) const
     }
 
     if (phase == PaintPhase::Overlay && layout_node().document().inspected_layout_node() == &layout_node_with_style_and_box_metrics()) {
-        auto content_rect = absolute_rect();
-
-        auto margin_box = box_model().margin_box();
-        CSSPixelRect margin_rect;
-        margin_rect.set_x(absolute_x() - margin_box.left);
-        margin_rect.set_width(content_width() + margin_box.left + margin_box.right);
-        margin_rect.set_y(absolute_y() - margin_box.top);
-        margin_rect.set_height(content_height() + margin_box.top + margin_box.bottom);
-
-        auto border_rect = absolute_border_box_rect();
-        auto padding_rect = absolute_padding_box_rect();
+        auto content_rect = absolute_united_content_rect();
+        auto margin_rect = united_rect_for_continuation_chain(*this, [](PaintableBox const& box) {
+            auto margin_box = box.box_model().margin_box();
+            return CSSPixelRect {
+                box.absolute_x() - margin_box.left,
+                box.absolute_y() - margin_box.top,
+                box.content_width() + margin_box.left + margin_box.right,
+                box.content_height() + margin_box.top + margin_box.bottom,
+            };
+        });
+        auto border_rect = absolute_united_border_box_rect();
+        auto padding_rect = absolute_united_padding_box_rect();
 
         auto paint_inspector_rect = [&](CSSPixelRect const& rect, Color color) {
             auto device_rect = context.enclosing_device_rect(rect).to_type<int>();
@@ -867,8 +941,7 @@ TraversalDecision PaintableBox::hit_test(CSSPixelPoint position, HitTestType typ
     if (clip_rect_for_hit_testing().has_value() && !clip_rect_for_hit_testing()->contains(position))
         return TraversalDecision::Continue;
 
-    auto position_adjusted_by_scroll_offset = position;
-    position_adjusted_by_scroll_offset.translate_by(-cumulative_offset_of_enclosing_scroll_frame());
+    auto position_adjusted_by_scroll_offset = position.translated(-cumulative_offset_of_enclosing_scroll_frame());
 
     if (!is_visible())
         return TraversalDecision::Continue;
@@ -892,10 +965,7 @@ TraversalDecision PaintableBox::hit_test(CSSPixelPoint position, HitTestType typ
             return TraversalDecision::Break;
     }
 
-    if (!absolute_border_box_rect().contains(position_adjusted_by_scroll_offset.x(), position_adjusted_by_scroll_offset.y()))
-        return TraversalDecision::Continue;
-
-    if (!visible_for_hit_testing())
+    if (!absolute_border_box_rect().contains(position_adjusted_by_scroll_offset))
         return TraversalDecision::Continue;
 
     return callback(HitTestResult { const_cast<PaintableBox&>(*this) });
@@ -905,18 +975,38 @@ Optional<HitTestResult> PaintableBox::hit_test(CSSPixelPoint position, HitTestTy
 {
     Optional<HitTestResult> result;
     (void)PaintableBox::hit_test(position, type, [&](HitTestResult candidate) {
-        if (candidate.paintable->visible_for_hit_testing()) {
-            if (!result.has_value()
-                || candidate.vertical_distance.value_or(CSSPixels::max_integer_value) < result->vertical_distance.value_or(CSSPixels::max_integer_value)
-                || candidate.horizontal_distance.value_or(CSSPixels::max_integer_value) < result->horizontal_distance.value_or(CSSPixels::max_integer_value)) {
-                result = move(candidate);
-            }
+        if (!result.has_value()
+            || candidate.vertical_distance.value_or(CSSPixels::max_integer_value) < result->vertical_distance.value_or(CSSPixels::max_integer_value)
+            || candidate.horizontal_distance.value_or(CSSPixels::max_integer_value) < result->horizontal_distance.value_or(CSSPixels::max_integer_value)) {
+            result = move(candidate);
         }
 
         if (result.has_value() && (type == HitTestType::Exact || (result->vertical_distance == 0 && result->horizontal_distance == 0)))
             return TraversalDecision::Break;
         return TraversalDecision::Continue;
     });
+
+    // If our hit-testing has resulted in a hit on a paintable, we know that it is the most specific hit. If that
+    // paintable turns out to be invisible for hit-testing, we need to traverse up the paintable tree to find the next
+    // paintable that is visible for hit-testing. This implements the behavior expected for pointer-events.
+    while (result.has_value() && !result->paintable->visible_for_hit_testing()) {
+        result->index_in_node = result->paintable->dom_node() ? result->paintable->dom_node()->index() : 0;
+        result->paintable = result->paintable->parent();
+
+        // If the new parent is an anonymous box part of a continuation, we need to follow the chain to the inline node
+        // that spawned the anonymous "middle" part of the continuation, since that inline node is the actual parent.
+        if (is<PaintableBox>(*result->paintable)) {
+            auto const& box_layout_node = static_cast<PaintableBox&>(*result->paintable).layout_node_with_style_and_box_metrics();
+            if (box_layout_node.is_anonymous() && box_layout_node.continuation_of_node()) {
+                auto const* original_inline_node = &box_layout_node;
+                while (original_inline_node->continuation_of_node())
+                    original_inline_node = original_inline_node->continuation_of_node();
+
+                result->paintable = const_cast<Paintable*>(original_inline_node->first_paintable());
+            }
+        }
+    }
+
     return result;
 }
 
@@ -925,8 +1015,7 @@ TraversalDecision PaintableWithLines::hit_test(CSSPixelPoint position, HitTestTy
     if (clip_rect_for_hit_testing().has_value() && !clip_rect_for_hit_testing()->contains(position))
         return TraversalDecision::Continue;
 
-    auto position_adjusted_by_scroll_offset = position;
-    position_adjusted_by_scroll_offset.translate_by(-cumulative_offset_of_enclosing_scroll_frame());
+    auto position_adjusted_by_scroll_offset = position.translated(-cumulative_offset_of_enclosing_scroll_frame());
 
     // TextCursor hit testing mode should be able to place cursor in contenteditable elements even if they are empty
     if (m_fragments.is_empty()
@@ -944,15 +1033,11 @@ TraversalDecision PaintableWithLines::hit_test(CSSPixelPoint position, HitTestTy
             return TraversalDecision::Break;
     }
 
-    if (!layout_node_with_style_and_box_metrics().children_are_inline() || m_fragments.is_empty()) {
+    if (!layout_node_with_style_and_box_metrics().children_are_inline() || m_fragments.is_empty())
         return PaintableBox::hit_test(position, type, callback);
-    }
 
     // NOTE: This CSSPixels -> Float -> CSSPixels conversion is because we can't AffineTransform::map() a CSSPixelPoint.
-    Gfx::FloatPoint offset_position {
-        (position_adjusted_by_scroll_offset.x() - transform_origin().x()).to_float(),
-        (position_adjusted_by_scroll_offset.y() - transform_origin().y()).to_float()
-    };
+    auto offset_position = position_adjusted_by_scroll_offset.translated(-transform_origin()).to_type<float>();
     auto transformed_position_adjusted_by_scroll_offset = combined_css_transform().inverse().value_or({}).map(offset_position).to_type<CSSPixels>() + transform_origin();
 
     if (hit_test_scrollbars(transformed_position_adjusted_by_scroll_offset, callback) == TraversalDecision::Break)
@@ -1026,7 +1111,7 @@ TraversalDecision PaintableWithLines::hit_test(CSSPixelPoint position, HitTestTy
         }
     }
 
-    if (!stacking_context() && is_visible() && absolute_border_box_rect().contains(transformed_position_adjusted_by_scroll_offset.x(), transformed_position_adjusted_by_scroll_offset.y())) {
+    if (!stacking_context() && is_visible() && absolute_border_box_rect().contains(transformed_position_adjusted_by_scroll_offset)) {
         if (callback(HitTestResult { const_cast<PaintableWithLines&>(*this) }) == TraversalDecision::Break)
             return TraversalDecision::Break;
     }

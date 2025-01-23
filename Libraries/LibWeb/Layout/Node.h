@@ -191,6 +191,9 @@ public:
     // https://drafts.csswg.org/css-ui/#propdef-user-select
     CSS::UserSelect user_select_used_value() const;
 
+    [[nodiscard]] bool has_been_wrapped_in_table_wrapper() const { return m_has_been_wrapped_in_table_wrapper; }
+    void set_has_been_wrapped_in_table_wrapper(bool value) { m_has_been_wrapped_in_table_wrapper = value; }
+
 protected:
     Node(DOM::Document&, DOM::Node*);
 
@@ -211,6 +214,8 @@ private:
     bool m_is_flex_item { false };
     bool m_is_grid_item { false };
 
+    bool m_has_been_wrapped_in_table_wrapper { false };
+
     GeneratedFor m_generated_for { GeneratedFor::NotGenerated };
 
     u32 m_initial_quote_nesting_level { 0 };
@@ -225,7 +230,7 @@ public:
     CSS::ImmutableComputedValues const& computed_values() const { return static_cast<CSS::ImmutableComputedValues const&>(*m_computed_values); }
     CSS::MutableComputedValues& mutable_computed_values() { return static_cast<CSS::MutableComputedValues&>(*m_computed_values); }
 
-    void apply_style(const CSS::ComputedProperties&);
+    void apply_style(CSS::ComputedProperties const&);
 
     Gfx::Font const& first_available_font() const;
     Vector<CSS::BackgroundLayerData> const& background_layers() const { return computed_values().background_layers(); }
@@ -239,6 +244,8 @@ public:
     bool is_scroll_container() const;
 
     virtual void visit_edges(Cell::Visitor& visitor) override;
+
+    void set_computed_values(NonnullOwnPtr<CSS::ComputedValues>);
 
 protected:
     NodeWithStyle(DOM::Document&, DOM::Node*, GC::Ref<CSS::ComputedProperties>);
@@ -259,6 +266,13 @@ public:
     BoxModelMetrics& box_model() { return m_box_model; }
     BoxModelMetrics const& box_model() const { return m_box_model; }
 
+    GC::Ptr<NodeWithStyleAndBoxModelMetrics> continuation_of_node() const { return m_continuation_of_node; }
+    void set_continuation_of_node(Badge<TreeBuilder>, GC::Ptr<NodeWithStyleAndBoxModelMetrics> node) { m_continuation_of_node = node; }
+
+    void propagate_style_along_continuation(CSS::ComputedProperties const&) const;
+
+    virtual void visit_edges(Cell::Visitor& visitor) override;
+
 protected:
     NodeWithStyleAndBoxModelMetrics(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedProperties> style)
         : NodeWithStyle(document, node, style)
@@ -274,6 +288,7 @@ private:
     virtual bool is_node_with_style_and_box_model_metrics() const final { return true; }
 
     BoxModelMetrics m_box_model;
+    GC::Ptr<NodeWithStyleAndBoxModelMetrics> m_continuation_of_node;
 };
 
 template<>

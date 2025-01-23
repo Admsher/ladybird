@@ -17,6 +17,7 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/ShadowRoot.h>
+#include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
@@ -124,6 +125,7 @@ void HTMLLinkElement::attribute_changed(FlyString const& name, Optional<String> 
     Base::attribute_changed(name, old_value, value, namespace_);
 
     // 4.6.7 Link types - https://html.spec.whatwg.org/multipage/links.html#linkTypes
+    auto old_relationship = m_relationship;
     if (name == HTML::AttributeNames::rel) {
         m_relationship = 0;
         // Keywords are always ASCII case-insensitive, and must be compared as such.
@@ -165,8 +167,8 @@ void HTMLLinkElement::attribute_changed(FlyString const& name, Optional<String> 
         if (
             is_browsing_context_connected()
             && (
-                // AD-HOC: When the rel attribute changes
-                name == AttributeNames::rel ||
+                // AD-HOC: When the link element's type becomes a stylesheet
+                !(old_relationship & Relationship::Stylesheet) ||
                 // - When the href attribute of the link element of an external resource link that is already browsing-context connected is changed.
                 name == AttributeNames::href ||
                 // - When the disabled attribute of the link element of an external resource link that is already browsing-context connected is set, changed, or removed.
@@ -263,14 +265,14 @@ GC::Ptr<Fetch::Infrastructure::Request> HTMLLinkElement::create_link_request(HTM
     // 3. Let url be the result of encoding-parsing a URL given options's href, relative to options's base URL.
     // FIXME: Spec issue: We should be parsing this URL relative to a document or environment settings object.
     //        https://github.com/whatwg/html/issues/9715
-    auto url = options.base_url.complete_url(options.href);
+    auto url = DOMURL::parse(options.href, options.base_url);
 
     // 4. If url is failure, then return null.
-    if (!url.is_valid())
+    if (!url.has_value())
         return nullptr;
 
     // 5. Let request be the result of creating a potential-CORS request given url, options's destination, and options's crossorigin.
-    auto request = create_potential_CORS_request(vm(), url, options.destination, options.crossorigin);
+    auto request = create_potential_CORS_request(vm(), *url, options.destination, options.crossorigin);
 
     // 6. Set request's policy container to options's policy container.
     request->set_policy_container(options.policy_container);

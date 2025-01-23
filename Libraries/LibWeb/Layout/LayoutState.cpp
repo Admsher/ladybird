@@ -89,9 +89,8 @@ static CSSPixelRect measure_scrollable_overflow(Box const& box)
 
     // - All line boxes directly contained by the scroll container.
     if (is<Painting::PaintableWithLines>(box.first_paintable())) {
-        for (auto const& fragment : static_cast<Painting::PaintableWithLines const&>(*box.first_paintable()).fragments()) {
-            scrollable_overflow_rect = scrollable_overflow_rect.united(fragment.absolute_rect());
-        }
+        for (auto const& fragment : static_cast<Painting::PaintableWithLines const&>(*box.first_paintable()).fragments())
+            scrollable_overflow_rect.unite(fragment.absolute_rect());
     }
 
     auto content_overflow_rect = scrollable_overflow_rect;
@@ -117,8 +116,8 @@ static CSSPixelRect measure_scrollable_overflow(Box const& box)
             if (child_border_box.bottom() < 0 || child_border_box.right() < 0)
                 return TraversalDecision::Continue;
 
-            scrollable_overflow_rect = scrollable_overflow_rect.united(child_border_box);
-            content_overflow_rect = content_overflow_rect.united(child_border_box);
+            scrollable_overflow_rect.unite(child_border_box);
+            content_overflow_rect.unite(child_border_box);
 
             // - The scrollable overflow areas of all of the above boxes
             //   (including zero-area boxes and accounting for transforms as described above),
@@ -223,7 +222,12 @@ void LayoutState::commit(Box& root)
     root.document().for_each_shadow_including_inclusive_descendant([&](DOM::Node& node) {
         node.clear_paintable();
         if (node.layout_node() && is<InlineNode>(node.layout_node())) {
-            inline_nodes.set(static_cast<InlineNode*>(node.layout_node()));
+            // Inline nodes might have a continuation chain; add all inline nodes that are part of it.
+            for (GC::Ptr inline_node = static_cast<NodeWithStyleAndBoxModelMetrics*>(node.layout_node());
+                inline_node; inline_node = inline_node->continuation_of_node()) {
+                if (is<InlineNode>(*inline_node))
+                    inline_nodes.set(static_cast<InlineNode*>(inline_node.ptr()));
+            }
         }
         return TraversalDecision::Continue;
     });

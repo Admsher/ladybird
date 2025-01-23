@@ -19,6 +19,7 @@
 #include <LibWeb/CSS/CascadedProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Selector.h>
+#include <LibWeb/CSS/StyleInvalidationData.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 
@@ -149,6 +150,9 @@ public:
     Vector<MatchingRule> const& get_hover_rules() const;
     Vector<MatchingRule> collect_matching_rules(DOM::Element const&, CascadeOrigin, Optional<CSS::Selector::PseudoElement::Type>, bool& did_match_any_hover_rules, FlyString const& qualified_layer_name = {}) const;
 
+    InvalidationSet invalidation_set_for_properties(Vector<InvalidationSet::Property> const&) const;
+    bool invalidation_property_used_in_has_selector(InvalidationSet::Property const&) const;
+
     void invalidate_rule_cache();
 
     Gfx::Font const& initial_font() const;
@@ -174,7 +178,6 @@ public:
 
     [[nodiscard]] bool has_has_selectors() const;
     [[nodiscard]] bool has_defined_selectors() const;
-    [[nodiscard]] bool has_attribute_selector(FlyString const& attribute_name) const;
 
     size_t number_of_css_font_faces_with_loading_in_progress() const;
 
@@ -255,7 +258,6 @@ private:
     struct SelectorInsights {
         bool has_has_selectors { false };
         bool has_defined_selectors { false };
-        HashTable<FlyString> all_names_used_in_attribute_selectors;
     };
 
     struct RuleCache {
@@ -278,6 +280,7 @@ private:
 
     OwnPtr<SelectorInsights> m_selector_insights;
     Vector<MatchingRule> m_hover_rules;
+    OwnPtr<StyleInvalidationData> m_style_invalidation_data;
     OwnPtr<RuleCache> m_author_rule_cache;
     OwnPtr<RuleCache> m_user_rule_cache;
     OwnPtr<RuleCache> m_user_agent_rule_cache;

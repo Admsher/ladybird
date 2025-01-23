@@ -34,12 +34,14 @@ public:
     u32 default_renderbuffer() const;
 
     Vector<String> get_supported_extensions();
+    void request_extension(char const* extension_name);
 
 private:
     NonnullRefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
     Gfx::IntSize m_size;
     RefPtr<Gfx::PaintingSurface> m_painting_surface;
     NonnullOwnPtr<Impl> m_impl;
+    Optional<Vector<String>> m_requestable_extensions;
 };
 
 }

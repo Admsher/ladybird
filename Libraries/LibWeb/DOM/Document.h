@@ -151,7 +151,7 @@ public:
     String url_string() const { return m_url.to_string(); }
     String document_uri() const { return url_string(); }
 
-    URL::Origin origin() const;
+    URL::Origin const& origin() const;
     void set_origin(URL::Origin const& origin);
 
     HTML::OpenerPolicy const& opener_policy() const { return m_opener_policy; }
@@ -502,6 +502,9 @@ public:
     bool needs_full_style_update() const { return m_needs_full_style_update; }
     void set_needs_full_style_update(bool b) { m_needs_full_style_update = b; }
 
+    [[nodiscard]] bool needs_full_layout_tree_update() const { return m_needs_full_layout_tree_update; }
+    void set_needs_full_layout_tree_update(bool b) { m_needs_full_layout_tree_update = b; }
+
     void set_needs_to_refresh_scroll_state(bool b);
 
     bool has_active_favicon() const { return m_active_favicon; }
@@ -578,12 +581,12 @@ public:
     void set_previous_document_unload_timing(DocumentUnloadTimingInfo const& previous_document_unload_timing) { m_previous_document_unload_timing = previous_document_unload_timing; }
 
     // https://w3c.github.io/editing/docs/execCommand/
-    bool exec_command(FlyString const& command, bool show_ui, String const& value);
-    bool query_command_enabled(FlyString const& command);
-    bool query_command_indeterm(FlyString const& command);
-    bool query_command_state(FlyString const& command);
-    bool query_command_supported(FlyString const& command);
-    String query_command_value(FlyString const& command);
+    WebIDL::ExceptionOr<bool> exec_command(FlyString const& command, bool show_ui, String const& value);
+    WebIDL::ExceptionOr<bool> query_command_enabled(FlyString const& command);
+    WebIDL::ExceptionOr<bool> query_command_indeterm(FlyString const& command);
+    WebIDL::ExceptionOr<bool> query_command_state(FlyString const& command);
+    WebIDL::ExceptionOr<bool> query_command_supported(FlyString const& command);
+    WebIDL::ExceptionOr<String> query_command_value(FlyString const& command);
 
     // https://w3c.github.io/selection-api/#dfn-has-scheduled-selectionchange-event
     bool has_scheduled_selectionchange_event() const { return m_has_scheduled_selectionchange_event; }
@@ -936,6 +939,7 @@ private:
     bool m_needs_layout { false };
 
     bool m_needs_full_style_update { false };
+    bool m_needs_full_layout_tree_update { false };
 
     bool m_needs_animated_style_update { false };
 

@@ -11,9 +11,12 @@
 #include <LibWeb/Bindings/WebGLRenderingContextPrototype.h>
 #include <LibWeb/HTML/HTMLCanvasElement.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
+#include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Painting/Paintable.h>
-#include <LibWeb/WebGL/ANGLEInstancedArrays.h>
 #include <LibWeb/WebGL/EventNames.h>
+#include <LibWeb/WebGL/Extensions/ANGLEInstancedArrays.h>
+#include <LibWeb/WebGL/Extensions/OESVertexArrayObject.h>
+#include <LibWeb/WebGL/Extensions/WebGLDrawBuffers.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
 #include <LibWeb/WebGL/WebGLContextEvent.h>
 #include <LibWeb/WebGL/WebGLRenderingContext.h>
@@ -88,6 +91,9 @@ void WebGLRenderingContext::visit_edges(Cell::Visitor& visitor)
     Base::visit_edges(visitor);
     WebGLRenderingContextImpl::visit_edges(visitor);
     visitor.visit(m_canvas_element);
+    visitor.visit(m_angle_instanced_arrays_extension);
+    visitor.visit(m_oes_vertex_array_object_extension);
+    visitor.visit(m_webgl_draw_buffers_extension);
 }
 
 void WebGLRenderingContext::present()
@@ -173,9 +179,45 @@ Optional<Vector<String>> WebGLRenderingContext::get_supported_extensions()
 
 JS::Object* WebGLRenderingContext::get_extension(String const& name)
 {
-    if (name == "ANGLE_instanced_arrays"sv) {
-        return MUST(ANGLEInstancedArrays::create(realm()));
+    // Returns an object if, and only if, name is an ASCII case-insensitive match [HTML] for one of the names returned
+    // from getSupportedExtensions; otherwise, returns null. The object returned from getExtension contains any constants
+    // or functions provided by the extension. A returned object may have no constants or functions if the extension does
+    // not define any, but a unique object must still be returned. That object is used to indicate that the extension has
+    // been enabled.
+    auto supported_extensions = get_supported_extensions();
+    auto supported_extension_iterator = supported_extensions->find_if([&name](String const& supported_extension) {
+        return Infra::is_ascii_case_insensitive_match(supported_extension, name);
+    });
+    if (supported_extension_iterator == supported_extensions->end())
+        return nullptr;
+
+    if (Infra::is_ascii_case_insensitive_match(name, "ANGLE_instanced_arrays"sv)) {
+        if (!m_angle_instanced_arrays_extension) {
+            m_angle_instanced_arrays_extension = MUST(Extensions::ANGLEInstancedArrays::create(realm(), *this));
+        }
+
+        VERIFY(m_angle_instanced_arrays_extension);
+        return m_angle_instanced_arrays_extension;
     }
+
+    if (Infra::is_ascii_case_insensitive_match(name, "OES_vertex_array_object"sv)) {
+        if (!m_oes_vertex_array_object_extension) {
+            m_oes_vertex_array_object_extension = MUST(Extensions::OESVertexArrayObject::create(realm(), *this));
+        }
+
+        VERIFY(m_oes_vertex_array_object_extension);
+        return m_oes_vertex_array_object_extension;
+    }
+
+    if (Infra::is_ascii_case_insensitive_match(name, "WEBGL_draw_buffers"sv)) {
+        if (!m_webgl_draw_buffers_extension) {
+            m_webgl_draw_buffers_extension = MUST(Extensions::WebGLDrawBuffers::create(realm(), *this));
+        }
+
+        VERIFY(m_webgl_draw_buffers_extension);
+        return m_webgl_draw_buffers_extension;
+    }
+
     return nullptr;
 }
 

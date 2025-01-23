@@ -4544,13 +4544,6 @@ void Parser::check_identifier_name_for_assignment_validity(DeprecatedFlyString c
     }
 }
 
-bool Parser::match_with_clause() const
-{
-    if (m_state.current_token.original_value() == "with"sv)
-        return true;
-    return !m_state.current_token.trivia_contains_line_terminator() && m_state.current_token.original_value() == "assert"sv;
-}
-
 DeprecatedFlyString Parser::consume_string_value()
 {
     VERIFY(match(TokenType::StringLiteral));
@@ -4585,11 +4578,10 @@ ModuleRequest Parser::parse_module_request()
 
     ModuleRequest request { consume_string_value() };
 
-    if (!match_with_clause())
+    if (!match(TokenType::With))
         return request;
 
-    VERIFY(m_state.current_token.original_value().is_one_of("with"sv, "assert"sv));
-    consume(TokenType::Identifier);
+    consume(TokenType::With);
     consume(TokenType::CurlyOpen);
 
     while (!done() && !match(TokenType::CurlyClose)) {
@@ -4631,10 +4623,10 @@ static DeprecatedFlyString default_string_value = "default";
 NonnullRefPtr<ImportStatement const> Parser::parse_import_statement(Program& program)
 {
     // We use the extended syntax which adds:
-    //  ImportDeclaration:
-    //      import ImportClause FromClause [no LineTerminator here] WithClause;
-    //      import ModuleSpecifier [no LineTerminator here] WithClause;
-    // From:  https://tc39.es/proposal-import-attributes/#prod-ImportDeclaration
+    //     ImportDeclaration:
+    //         import ImportClause FromClause WithClause[opt] ;
+    //         import ModuleSpecifier WithClause[opt] ;
+    // From: https://tc39.es/proposal-import-attributes/#prod-ImportDeclaration
 
     auto rule_start = push_start();
     if (program.type() != Program::Type::Module)

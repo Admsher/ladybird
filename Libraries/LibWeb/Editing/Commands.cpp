@@ -52,7 +52,7 @@ bool command_back_color_action(DOM::Document& document, String const& value)
 bool command_bold_action(DOM::Document& document, String const&)
 {
     // If queryCommandState("bold") returns true, set the selection's value to "normal".
-    if (document.query_command_state(CommandNames::bold)) {
+    if (MUST(document.query_command_state(CommandNames::bold))) {
         set_the_selections_value(document, CommandNames::bold, "normal"_string);
     }
 
@@ -79,9 +79,9 @@ bool command_create_link_action(DOM::Document& document, String const& value)
         node->for_each_ancestor([&](GC::Ref<DOM::Node> ancestor) {
             if (visited_ancestors.contains(ancestor.ptr()))
                 return IterationDecision::Break;
-            if (is<HTML::HTMLAnchorElement>(*ancestor) && ancestor->is_editable()
-                && static_cast<DOM::Element&>(*ancestor).has_attribute(HTML::AttributeNames::href))
-                MUST(static_cast<HTML::HTMLAnchorElement&>(*ancestor).set_href(value));
+            if (auto* anchor = as_if<HTML::HTMLAnchorElement>(*ancestor); anchor && anchor->is_editable()
+                && anchor->has_attribute(HTML::AttributeNames::href))
+                MUST(anchor->set_href(value));
             visited_ancestors.set(ancestor.ptr());
             return IterationDecision::Continue;
         });
@@ -652,11 +652,10 @@ bool command_format_block_action(DOM::Document& document, String const& value)
         return result;
     };
     new_range->for_each_contained([&](GC::Ref<DOM::Node> node) {
-        if (node->is_editable()
+        if (auto const* element = as_if<DOM::Element>(*node); node->is_editable()
             && (node_list.is_empty() || !node_list.last()->is_ancestor_of(node))
             && (is_non_list_single_line_container(node) || is_allowed_child_of_node(node, HTML::TagNames::p)
-                || (is<DOM::Element>(*node)
-                    && static_cast<DOM::Element&>(*node).local_name().is_one_of(HTML::TagNames::dd, HTML::TagNames::dt)))
+                || (element && element->local_name().is_one_of(HTML::TagNames::dd, HTML::TagNames::dt)))
             && !is_ancestor_of_prohibited_paragraph_child(node)) {
             node_list.append(node);
         }
@@ -747,9 +746,8 @@ bool command_format_block_action(DOM::Document& document, String const& value)
             [&](GC::Ref<DOM::Node> sibling) {
                 if (resulting_value.is_one_of("div"sv, "p"sv))
                     return false;
-                return is<HTML::HTMLElement>(*sibling)
-                    && static_cast<DOM::Element&>(*sibling).local_name() == resulting_value
-                    && !static_cast<DOM::Element&>(*sibling).has_attributes();
+                auto const* html_element = as_if<HTML::HTMLElement>(*sibling);
+                return html_element && html_element->local_name() == resulting_value && !html_element->has_attributes();
             },
             [&] { return MUST(DOM::create_element(document, resulting_value, Namespace::HTML)); });
         if (result)
@@ -800,9 +798,9 @@ bool command_format_block_indeterminate(DOM::Document const& document)
 
         // 3. If node is an editable HTML element whose local name is a formattable block name, and node is not the
         //    ancestor of a prohibited paragraph child, set current type to node's local name.
-        if (node->is_editable() && is<HTML::HTMLElement>(*node)
-            && is_formattable_block_name(static_cast<DOM::Element&>(*node).local_name()))
-            current_type = static_cast<DOM::Element&>(*node).local_name();
+        if (auto const* html_element = as_if<HTML::HTMLElement>(*node); node->is_editable() && html_element
+            && is_formattable_block_name(html_element->local_name()))
+            current_type = html_element->local_name();
 
         // 4. If type is null, set type to current type.
         if (!type.has_value()) {
@@ -851,8 +849,8 @@ String command_format_block_value(DOM::Document const& document)
 
     // 5. If node is an editable HTML element whose local name is a formattable block name, and node is not the ancestor
     //    of a prohibited paragraph child, return node's local name, converted to ASCII lowercase.
-    if (node->is_editable() && is<HTML::HTMLElement>(*node)
-        && is_formattable_block_name(static_cast<DOM::Element&>(*node).local_name())) {
+    if (auto const* html_element = as_if<HTML::HTMLElement>(*node); node->is_editable() && html_element
+        && is_formattable_block_name(html_element->local_name())) {
         bool is_ancestor_of_prohibited_paragraph_child = false;
         node->for_each_in_subtree([&is_ancestor_of_prohibited_paragraph_child](GC::Ref<DOM::Node> descendant) {
             if (is_prohibited_paragraph_child(descendant)) {
@@ -862,7 +860,7 @@ String command_format_block_value(DOM::Document const& document)
             return TraversalDecision::Continue;
         });
         if (!is_ancestor_of_prohibited_paragraph_child)
-            return static_cast<DOM::Element&>(*node).local_name().to_string().to_ascii_lowercase();
+            return html_element->local_name().to_string().to_ascii_lowercase();
     }
 
     // 6. Return the empty string.
@@ -1363,15 +1361,14 @@ bool command_insert_linebreak_action(DOM::Document& document, String const&)
     //         * Insert another newline (\n) character if the active range's start offset is equal to the length of the
     //           active range's start node.
     //         * Return true.
-    if (is<DOM::Text>(*start_node)) {
-        auto& text_node = static_cast<DOM::Text&>(*start_node);
+    if (auto* text_node = as_if<DOM::Text>(*start_node); text_node) {
         auto resolved_white_space = resolved_keyword(*start_node, CSS::PropertyID::WhiteSpace);
         if (resolved_white_space.has_value()
             && first_is_one_of(resolved_white_space.value(), CSS::Keyword::Pre, CSS::Keyword::PreLine, CSS::Keyword::PreWrap)) {
-            MUST(text_node.insert_data(active_range.start_offset(), "\n"_string));
+            MUST(text_node->insert_data(active_range.start_offset(), "\n"_string));
             MUST(selection.collapse(start_node, active_range.start_offset() + 1));
             if (selection.range()->start_offset() == start_node->length())
-                MUST(text_node.insert_data(active_range.start_offset(), "\n"_string));
+                MUST(text_node->insert_data(active_range.start_offset(), "\n"_string));
             return true;
         }
     }
@@ -1645,7 +1642,7 @@ bool command_insert_paragraph_action(DOM::Document& document, String const&)
         || ((new_line_range->start_container() == new_line_range->end_container() && new_line_range->start_offset() == new_line_range->end_offset() - 1)
             && is<HTML::HTMLBRElement>(*new_line_range->start_container()));
 
-    auto& container_element = verify_cast<DOM::Element>(*container);
+    auto& container_element = as<DOM::Element>(*container);
     auto new_container_name = [&] -> FlyString {
         // 18. If the local name of container is "h1", "h2", "h3", "h4", "h5", or "h6", and end of line is true, let new
         //     container name be the default single-line container name.
@@ -1867,7 +1864,7 @@ bool command_insert_unordered_list_state(DOM::Document const& document)
 bool command_italic_action(DOM::Document& document, String const&)
 {
     // If queryCommandState("italic") returns true, set the selection's value to "normal".
-    if (document.query_command_state(CommandNames::italic)) {
+    if (MUST(document.query_command_state(CommandNames::italic))) {
         set_the_selections_value(document, CommandNames::italic, "normal"_string);
     }
 
@@ -2259,7 +2256,7 @@ bool command_select_all_action(DOM::Document& document, String const&)
 bool command_strikethrough_action(DOM::Document& document, String const&)
 {
     // If queryCommandState("strikethrough") returns true, set the selection's value to null.
-    if (document.query_command_state(CommandNames::strikethrough)) {
+    if (MUST(document.query_command_state(CommandNames::strikethrough))) {
         set_the_selections_value(document, CommandNames::strikethrough, {});
     }
 
@@ -2294,7 +2291,7 @@ bool command_style_with_css_state(DOM::Document const& document)
 bool command_subscript_action(DOM::Document& document, String const&)
 {
     // 1. Call queryCommandState("subscript"), and let state be the result.
-    auto state = document.query_command_state(CommandNames::subscript);
+    auto state = MUST(document.query_command_state(CommandNames::subscript));
 
     // 2. Set the selection's value to null.
     set_the_selections_value(document, CommandNames::subscript, {});
@@ -2347,7 +2344,7 @@ bool command_subscript_indeterminate(DOM::Document const& document)
 bool command_superscript_action(DOM::Document& document, String const&)
 {
     // 1. Call queryCommandState("superscript"), and let state be the result.
-    auto state = document.query_command_state(CommandNames::superscript);
+    auto state = MUST(document.query_command_state(CommandNames::superscript));
 
     // 2. Set the selection's value to null.
     set_the_selections_value(document, CommandNames::superscript, {});
@@ -2400,7 +2397,7 @@ bool command_superscript_indeterminate(DOM::Document const& document)
 bool command_underline_action(DOM::Document& document, String const&)
 {
     // If queryCommandState("underline") returns true, set the selection's value to null.
-    if (document.query_command_state(CommandNames::underline)) {
+    if (MUST(document.query_command_state(CommandNames::underline))) {
         set_the_selections_value(document, CommandNames::underline, {});
     }
 

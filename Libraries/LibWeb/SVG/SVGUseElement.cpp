@@ -149,7 +149,7 @@ GC::Ptr<DOM::Element> SVGUseElement::referenced_element()
     if (!data || !is<SVG::SVGDecodedImageData>(*data))
         return nullptr;
 
-    return verify_cast<SVG::SVGDecodedImageData>(*data).svg_document().get_element_by_id(*m_href.fragment());
+    return as<SVG::SVGDecodedImageData>(*data).svg_document().get_element_by_id(*m_href.fragment());
 }
 
 // https://svgwg.org/svg2-draft/linking.html#processingURL-fetch
@@ -183,6 +183,9 @@ void SVGUseElement::clone_element_tree_as_our_shadow_tree(Element* to_clone)
         auto cloned_reference_node = MUST(to_clone->clone_node(nullptr, true));
         shadow_root()->append_child(cloned_reference_node).release_value_but_fixme_should_propagate_errors();
     }
+
+    // FIXME: Only invalidate the part of the layout tree that is affected by this change.
+    document().invalidate_layout_tree();
 }
 
 bool SVGUseElement::is_valid_reference_element(Element const& reference_element) const

@@ -29,7 +29,13 @@ private:
 
     i32 calculate_list_item_index(DOM::Node&);
 
-    void create_layout_tree(DOM::Node&, Context&);
+    void update_layout_tree_before_children(DOM::Node&, GC::Ref<Layout::Node>, Context&, bool element_has_content_visibility_hidden);
+    void update_layout_tree_after_children(DOM::Node&, GC::Ref<Layout::Node>, Context&, bool element_has_content_visibility_hidden);
+    enum class MustCreateSubtree {
+        No,
+        Yes,
+    };
+    void update_layout_tree(DOM::Node&, Context&, MustCreateSubtree);
 
     void push_parent(Layout::NodeWithStyle& node) { m_ancestor_stack.append(node); }
     void pop_parent() { m_ancestor_stack.take_last(); }
@@ -52,6 +58,7 @@ private:
     };
     void insert_node_into_inline_or_block_ancestor(Layout::Node&, CSS::Display, AppendOrPrepend);
     void create_pseudo_element_if_needed(DOM::Element&, CSS::Selector::PseudoElement::Type, AppendOrPrepend);
+    void restructure_block_node_in_inline_parent(NodeWithStyleAndBoxModelMetrics&);
 
     GC::Ptr<Layout::Node> m_layout_root;
     Vector<GC::Ref<Layout::NodeWithStyle>> m_ancestor_stack;

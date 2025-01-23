@@ -179,8 +179,8 @@ describe("in- and exports", () => {
         );
     });
 
-    test("can import with (useless) assertions", () => {
-        expectModulePassed("./import-with-assertions.mjs");
+    test("can import with (useless) attributes", () => {
+        expectModulePassed("./import-with-attributes.mjs");
     });
 
     test("namespace has expected ordering", () => {
@@ -218,6 +218,10 @@ describe("in- and exports", () => {
         const result = expectModulePassed("./default-regexp-export.mjs");
         expect(result.default).toBeInstanceOf(RegExp);
         expect(result.default.toString()).toBe(/foo/.toString());
+    });
+
+    test("importing a non-existent file results in a SyntaxError", () => {
+        expectedModuleToThrowSyntaxError("./i-do-no-exist.mjs", "Cannot find/open module");
     });
 });
 

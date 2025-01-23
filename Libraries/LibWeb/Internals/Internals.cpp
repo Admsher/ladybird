@@ -40,7 +40,7 @@ void Internals::initialize(JS::Realm& realm)
 
 HTML::Window& Internals::internals_window() const
 {
-    return verify_cast<HTML::Window>(HTML::relevant_global_object(*this));
+    return as<HTML::Window>(HTML::relevant_global_object(*this));
 }
 
 Page& Internals::internals_page() const
@@ -167,14 +167,14 @@ void Internals::spoof_current_url(String const& url_string)
 {
     auto url = DOMURL::parse(url_string);
 
-    VERIFY(url.is_valid());
+    VERIFY(url.has_value());
 
-    auto origin = url.origin();
+    auto origin = url->origin();
 
     auto& window = internals_window();
-    window.associated_document().set_url(url);
+    window.associated_document().set_url(url.value());
     window.associated_document().set_origin(origin);
-    HTML::relevant_settings_object(window.associated_document()).creation_url = url;
+    HTML::relevant_settings_object(window.associated_document()).creation_url = url.release_value();
 }
 
 GC::Ref<InternalAnimationTimeline> Internals::create_internal_animation_timeline()
@@ -242,6 +242,11 @@ u16 Internals::get_echo_server_port()
 void Internals::set_echo_server_port(u16 const port)
 {
     s_echo_server_port = port;
+}
+
+void Internals::set_browser_zoom(double factor)
+{
+    internals_page().client().page_did_set_browser_zoom(factor);
 }
 
 bool Internals::headless()
